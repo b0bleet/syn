@@ -3,6 +3,7 @@ import worker, {
   clientKind,
   type Env,
   ipv6Prefix,
+  LiveStats,
   Quota,
   routeOf,
   STATIC_FILES,
@@ -13,44 +14,57 @@ const RUNPOD = "https://api.runpod.ai/v2/ep1";
 const OK = { status: 200, headers: { "content-type": "text/plain" }, body: "spam\n" };
 const DONE = { id: "j", status: "COMPLETED", output: OK };
 
+/** Durable Object storage in memory. Values are copied in and out, as workerd does. */
 function storage() {
   const data = new Map<string, unknown>();
   let alarm: number | null = null;
-  return {
-    get: async (key: string) => data.get(key),
-    put: async (key: string, value: unknown) => void data.set(key, value),
+  const store = {
+    data,
+    writes: 0,
+    get: async (key: string) => structuredClone(data.get(key)),
+    put: async (key: string, value: unknown) => {
+      store.writes += 1;
+      data.set(key, structuredClone(value));
+    },
+    delete: async (keys: string | string[]) => {
+      for (const key of [keys].flat()) data.delete(key);
+    },
     deleteAll: async () => void data.clear(),
     getAlarm: async () => alarm,
     setAlarm: async (at: number) => void (alarm = at),
+    /** The runtime consumes an alarm as it fires. */
+    deleteAlarm: async () => void (alarm = null),
   };
+  return store;
 }
 
-function quotaNamespace() {
-  const objects = new Map<string, Quota>();
+/** Durable Objects by name, each with its own storage. */
+function namespace<T>(make: (state: DurableObjectState) => T) {
+  const objects = new Map<string, T>();
   return {
     idFromName: (name: string) => name,
     get(id: string) {
-      if (!objects.has(id)) {
-        objects.set(id, new Quota({ storage: storage() } as unknown as DurableObjectState, {}));
-      }
+      if (!objects.has(id)) objects.set(id, make({ storage: storage() } as unknown as DurableObjectState));
       return objects.get(id)!;
     },
   };
 }
 
 function makeEnv(overrides: Partial<Env> = {}): Env {
-  return {
+  const env = {
     RUNPOD_ENDPOINT_ID: "ep1",
     RUNPOD_API_KEY: "rp-secret",
     API_KEYS: "key-a, key-b",
-    QUOTA: quotaNamespace() as unknown as Env["QUOTA"],
+    QUOTA: namespace((state) => new Quota(state, {})) as unknown as Env["QUOTA"],
     ASSETS: { fetch: async () => new Response("<html>page</html>") } as unknown as Fetcher,
     DAILY_LIMIT: "3",
     GLOBAL_DAILY_LIMIT: "100",
     JOB_TIMEOUT_SECONDS: "60",
     POLL_SECONDS: "0",
     ...overrides,
-  };
+  } as Env;
+  env.LIVE ??= namespace((state) => new LiveStats(state, env)) as unknown as Env["LIVE"];
+  return env;
 }
 
 /** Stub RunPod: answers fetches in order and records each call. */
@@ -67,11 +81,17 @@ function runpod(...replies: (object | Response)[]) {
   return calls;
 }
 
-function call(env: Env, path: string, init: RequestInit & { ip?: string; key?: string } = {}) {
+async function call(env: Env, path: string, init: RequestInit & { ip?: string; key?: string } = {}) {
   const headers = new Headers(init.headers);
   headers.set("CF-Connecting-IP", init.ip ?? "203.0.113.7");
   if (init.key) headers.set("Authorization", `Bearer ${init.key}`);
-  return worker.fetch(new Request(`https://sifty.example${path}`, { ...init, headers }), env);
+  // What the Worker finishes after answering, such as recording the call, is done before a test looks.
+  const pending: Promise<unknown>[] = [];
+  const ctx = { waitUntil: (promise: Promise<unknown>) => void pending.push(promise) };
+  const request = new Request(`https://sifty.example${path}`, { ...init, headers });
+  const response = await worker.fetch(request, env, ctx as unknown as ExecutionContext);
+  await Promise.all(pending);
+  return response;
 }
 
 async function detail(response: Response): Promise<string> {
@@ -345,6 +365,14 @@ function statsSink() {
   return { points, dataset: dataset as unknown as AnalyticsEngineDataset };
 }
 
+/** A LIVE namespace whose object refuses everything, as when over the free plan's limits. */
+function refusingLive(): Env["LIVE"] {
+  const refuse = async () => {
+    throw new Error("limit exceeded");
+  };
+  return { idFromName: (name: string) => name, get: () => ({ add: refuse, page: refuse }) } as unknown as Env["LIVE"];
+}
+
 describe("API call statistics", () => {
   it("records each API call without its content, and nothing for the page or its files", async () => {
     const { points, dataset } = statsSink();
@@ -406,6 +434,9 @@ describe("API call statistics", () => {
     } as unknown as AnalyticsEngineDataset;
     runpod(DONE);
     expect((await call(makeEnv({ STATS: broken }), "/a,b/hi")).status).toBe(200);
+    // Nor when the live counts fail, say over the free plan's Durable Object limits.
+    runpod(DONE);
+    expect((await call(makeEnv({ LIVE: refusingLive() }), "/a,b/hi")).status).toBe(200);
     // Without the secret that keys client IDs, as in local dev, the call is counted anyway.
     const { points, dataset } = statsSink();
     runpod(DONE);
@@ -419,7 +450,13 @@ describe("API call statistics", () => {
     expect(routeOf("GET", "/", "")).toBe("GET /");
     expect(routeOf("POST", "/", "")).toBe("POST /");
     expect(routeOf("POST", "/v1/systemone", "")).toBe("POST /v1/systemone");
+    expect(routeOf("GET", "/v1/score", "?labels=a,b&text=hi")).toBe("GET /v1/score");
+    expect(routeOf("GET", "/openapi.json", "")).toBe("GET /openapi.json");
     expect(routeOf("GET", "/unknown", "")).toBe("other");
+    // Made-up paths and methods are named by shape, so nobody can write on the public page.
+    expect(routeOf("GET", "/v1/visit-my-site.example", "")).toBe("GET /<labels>/<text>");
+    expect(routeOf("GET", "/v1/buy", "")).toBe("GET /<labels>/<text>");
+    expect(routeOf("SPAMSPAM", "/a,b/hi", "")).toBe("other");
     expect(clientKind("curl/8.7.1")).toBe("curl");
     expect(clientKind("typesafe-sdk/0.7.0")).toBe("typesafe-sdk");
     expect(clientKind("python-httpx/0.28.1")).toBe("python");
@@ -473,10 +510,111 @@ describe("public statistics page", () => {
     const page = await call(env, "/stats");
     expect(page.status).toBe(200);
     expect(page.headers.get("content-type")).toContain("text/html");
+    expect(await page.text()).toContain("<b>0</b>calls");
     expect(calls.length).toBe(7);
     expect(points).toHaveLength(0);
     runpod(DONE);
     expect((await call(env, "/a,b/hi")).status).toBe(200);
+  });
+
+  it("counts today's calls live, ahead of the tables", async () => {
+    // Client IDs change daily; a fixed day keeps the users estimate the same on every run.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-21T12:00:00Z"));
+    const env = makeEnv({ ...connected, DAILY_LIMIT: "1" });
+    runpod(DONE, DONE, DONE);
+    await call(env, "/a,b/hi");
+    await call(env, "/", {
+      method: "POST",
+      body: JSON.stringify({ input: ["a", "b"], labels: ["x", "y"] }),
+      key: "key-a",
+    });
+    expect((await call(env, "/a,b/hi")).status).toBe(429);
+    await call(env, "/a,b/hi", { ip: "198.51.100.9" });
+    const calls = cloudflareSql();
+    const html = await (await call(env, "/stats")).text();
+    expect(html).toContain(
+      "<h2>Today (UTC), live</h2><div class=\"tiles\"><div><b>4</b>calls</div><div><b>5</b>texts classified</div>" +
+        "<div><b>2</b>users</div><div><b>1</b>with an unlimited key</div><div><b>1</b>hit the daily limit</div>" +
+        "<div><b>0</b>failed</div></div>",
+    );
+    expect(html).toMatch(/<h2>Last 7 days, updated \d\d:\d\d UTC<\/h2>/);
+    // The next call shows at once; the tables aren't queried again.
+    expect(calls).toHaveLength(7);
+    runpod(DONE);
+    await call(env, "/a,b/hi", { ip: "192.0.2.4" });
+    const again = cloudflareSql();
+    expect(await (await call(env, "/stats")).text()).toContain("<b>5</b>calls");
+    expect(again).toHaveLength(0);
+  });
+
+  it("saves each call as one small write, keeps it through a restart, and starts over each day", async () => {
+    const store = storage();
+    const state = { storage: store } as unknown as DurableObjectState;
+    const live = new LiveStats(state, {});
+    for (let i = 0; i < 10; i++) {
+      await live.add({ units: 2, status: i ? 200 : 502, keyed: false, client: String(i % 3).repeat(32) });
+    }
+    await live.add({ units: 1, status: 200, keyed: true, client: "none" });
+    expect(store.writes).toBe(11);
+    expect([...store.data.keys()]).toEqual(["today"]);
+    // A new instance, as after the object sat idle or a deploy, has everything.
+    const restarted = new LiveStats(state, {});
+    expect((await restarted.page(7)).today).toMatchObject({ calls: 11, texts: 21, users: 3, keyed: 1, failed: 1 });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + 86_400_000);
+    expect((await restarted.page(7)).today).toMatchObject({ calls: 0, users: 0 });
+  });
+
+  it("keeps nothing past its UTC day", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const at = (time: string) => vi.setSystemTime(new Date(time));
+    const one = { units: 1, status: 200, keyed: false, client: "a".repeat(32) };
+    at("2026-09-21T23:00:00Z");
+    const store = storage();
+    const live = new LiveStats({ storage: store } as unknown as DurableObjectState, {});
+    await live.add(one);
+    await live.page(90);
+    expect([...store.data.keys()].sort()).toEqual(["tables:90", "today"]);
+    expect(await store.getAlarm()).toBe(Date.parse("2026-09-22T00:00:00Z"));
+    at("2026-09-22T00:00:00Z");
+    await store.deleteAlarm();
+    await live.alarm();
+    expect(store.data.size).toBe(0);
+    expect(await store.getAlarm()).toBeNull();
+
+    // A call just after midnight, before the alarm runs, has started the new day: that stays,
+    // and goes the midnight after.
+    at("2026-09-22T23:59:59Z");
+    await live.add(one);
+    at("2026-09-23T00:00:00.500Z");
+    await live.add(one);
+    await store.deleteAlarm();
+    await live.alarm();
+    expect(store.data.get("today")).toMatchObject({ day: "2026-09-23", calls: 1 });
+    expect(await store.getAlarm()).toBe(Date.parse("2026-09-24T00:00:00Z"));
+  });
+
+  it("counts users exactly while they are few, then estimates them in a fixed size", async () => {
+    const store = storage();
+    const live = new LiveStats({ storage: store } as unknown as DurableObjectState, {});
+    // Stand-ins for client IDs: fixed, and as uniform as the real HMACs.
+    const ids = await Promise.all(
+      Array.from({ length: 2000 }, async (_, n) => {
+        const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(String(n)));
+        return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("").slice(0, 32);
+      }),
+    );
+    const add = (client: string) => live.add({ units: 1, status: 200, keyed: false, client });
+    for (let i = 0; i < 1500; i++) await add(ids[i % 1000]);
+    expect((await live.page(7)).today.users).toBe(1000);
+    for (let i = 1000; i < 2000; i++) await add(ids[i]);
+    expect(Math.abs((await live.page(7)).today.users - 2000)).toBeLessThan(60);
+    // Past 1,024 the IDs are dropped for 4,096 small ranks, however many more come.
+    const saved = store.data.get("today") as { ids: number[]; sketch: Uint8Array };
+    expect(saved.ids).toEqual([]);
+    expect(saved.sketch.length).toBe(4096);
+    expect(Math.max(...saved.sketch)).toBeLessThanOrEqual(21);
   });
 
   it("queries the chosen range and shows the numbers, escaped", async () => {
@@ -496,16 +634,16 @@ describe("public statistics page", () => {
     expect(html).toContain("<td>2026-09-21</td>");
     expect(html).toContain("<b>30 days</b>");
     expect(html).toContain("&#60;script&#62;");
-    expect(html).not.toContain("<script>");
+    expect(html).not.toContain("<script>x");
     expect(html).not.toContain("cf-read");
   });
 
-  it("serves each range from cache for ten minutes, whatever else the query holds", async () => {
+  it("caches the page 30 s per data center, and the tables ten minutes for all of them", async () => {
     const store = workersCache();
     const calls = cloudflareSql();
     const env = makeEnv(connected);
     const first = await call(env, "/stats");
-    expect(first.headers.get("cache-control")).toBe("public, max-age=600");
+    expect(first.headers.get("cache-control")).toBe("public, max-age=30");
     expect(calls).toHaveLength(7);
     await call(env, "/stats?days=7");
     await call(env, "/stats?days=5;DROP");
@@ -516,20 +654,48 @@ describe("public statistics page", () => {
       "https://sifty.example/stats?days=7",
       "https://sifty.example/stats?days=90",
     ]);
+    // Another data center, or this one 30 s on, renders the page again but shares the tables.
+    store.clear();
+    await call(env, "/stats");
+    expect(calls).toHaveLength(14);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + 600_000);
+    store.clear();
+    await call(env, "/stats");
+    expect(calls).toHaveLength(21);
   });
 
-  it("says so when not connected or failing, without the details, and retries sooner", async () => {
+  it("queries a range once when views arrive together", async () => {
+    const calls = cloudflareSql();
+    const env = makeEnv(connected);
+    await Promise.all([call(env, "/stats"), call(env, "/stats"), call(env, "/stats")]);
+    expect(calls).toHaveLength(7);
+  });
+
+  it("says so when not connected or failing, without the details, and retries after a minute", async () => {
     vi.spyOn(console, "error").mockImplementation(() => undefined);
     const calls = cloudflareSql(false);
     const unset = await call(makeEnv(), "/stats");
     expect(await unset.text()).toContain("aren't connected yet");
     expect(calls).toHaveLength(0);
-    const failing = await call(makeEnv(connected), "/stats");
+    const env = makeEnv(connected);
+    const failing = await call(env, "/stats");
     expect(failing.status).toBe(200);
-    expect(failing.headers.get("cache-control")).toBe("public, max-age=60");
     const text = await failing.text();
     expect(text).toContain("unavailable right now");
+    expect(text).toContain("Today (UTC), live");
     expect(text).not.toContain("acc1");
+    expect(calls).toHaveLength(7);
+    await call(env, "/stats");
+    expect(calls).toHaveLength(7);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + 60_000);
+    await call(env, "/stats");
+    expect(calls).toHaveLength(14);
+    // Even with the live object down, the page answers.
+    const down = await call(makeEnv({ LIVE: refusingLive() }), "/stats");
+    expect(down.status).toBe(200);
+    expect(await down.text()).toContain("unavailable right now");
   });
 });
 

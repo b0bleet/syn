@@ -7,10 +7,19 @@
   // The page in public/. The Worker runs first so `/` can serve the page to browsers and the
   // API to everything else; it hands page requests to ASSETS.
   "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": true },
-  "durable_objects": { "bindings": [{ "name": "QUOTA", "class_name": "Quota" }] },
+  // QUOTA meters the free tier; LIVE holds today's counts and the /stats tables for all data centers.
+  "durable_objects": {
+    "bindings": [
+      { "name": "QUOTA", "class_name": "Quota" },
+      { "name": "LIVE", "class_name": "LiveStats" }
+    ]
+  },
   // One data point per API call: how the API is used, never what is classified. Shown at /stats.
   "analytics_engine_datasets": [{ "binding": "STATS", "dataset": "syn_api_calls" }],
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Quota"] }],
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["Quota"] },
+    { "tag": "v2", "new_sqlite_classes": ["LiveStats"] }
+  ],
   "vars": {
     // Free tier, in units per UTC day (one per request, or per text in a batch). The page in
     // public/index.html states DAILY_LIMIT; keep them in step. GLOBAL_DAILY_LIMIT bounds GPU

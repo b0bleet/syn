@@ -9,12 +9,15 @@
  * against a global daily cap that bounds GPU spend. Keys listed in API_KEYS skip both. `/` is the
  * page in public/, and its files (icons, preview image, robots.txt) are served as they are;
  * neither is counted or reaches a GPU. /health reports RunPod worker counts without waking a GPU.
- * Every API call is recorded, without its content, in the STATS dataset; /stats shows it publicly.
+ * Every API call is recorded, without its content, in the STATS dataset and today's LIVE counts,
+ * after its answer is sent; /stats shows both publicly.
  */
 
+import type { LiveStats } from "./live";
 import type { Quota } from "./quota";
 import { type StatsEnv, statsPage } from "./stats";
 
+export { LiveStats } from "./live";
 export { Quota } from "./quota";
 
 export interface Env extends StatsEnv {
@@ -37,6 +40,8 @@ export interface Env extends StatsEnv {
   RUNPOD_API_BASE?: string;
   /** Analytics Engine dataset with one data point per API call, shown at /stats. */
   STATS?: AnalyticsEngineDataset;
+  /** Today's counts, live, and the shared copy of the /stats tables. */
+  LIVE: DurableObjectNamespace<LiveStats>;
 }
 
 interface Job {
@@ -110,7 +115,7 @@ class JobError extends Error {
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     if (request.method === "OPTIONS") {
       return new Response(null, {
@@ -125,23 +130,27 @@ export default {
     }
     if (url.pathname === "/health") return withCors(await health(env));
     const reading = request.method === "GET" || request.method === "HEAD";
-    if (reading && url.pathname === "/stats") return statsPage(url, env);
+    if (reading && url.pathname === "/stats") return statsPage(url, liveStats(env));
     if (reading && STATIC_FILES.has(url.pathname)) return env.ASSETS.fetch(request);
     if (reading && url.pathname === "/" && !url.search && wantsPage(request)) {
       return env.ASSETS.fetch(request);
     }
     const started = Date.now();
     const call = await api(request, env, url);
-    if (env.STATS) {
-      const ms = Date.now() - started;
-      // Stats must never cost a caller their answer.
-      await record(env.STATS, request, url, call, ms, env.RUNPOD_API_KEY).catch((error) =>
+    // Recorded after the answer is sent, so it never slows or costs a caller their answer.
+    ctx.waitUntil(
+      record(request, url, call, Date.now() - started, env).catch((error) =>
         console.error("API call not recorded", error),
-      );
-    }
+      ),
+    );
     return call.response;
   },
 };
+
+/** The one LiveStats object, shared by every data center. */
+function liveStats(env: Env): DurableObjectStub<LiveStats> {
+  return env.LIVE.get(env.LIVE.idFromName("global"));
+}
 
 async function api(request: Request, env: Env, url: URL): Promise<ApiCall> {
   const body = request.method === "GET" || request.method === "HEAD" ? null : await request.text();
@@ -179,48 +188,52 @@ async function api(request: Request, env: Env, url: URL): Promise<ApiCall> {
 }
 
 /**
- * One data point per API call, shown at /stats. It records how the API is used, never
- * what is classified: no text, labels, or IP address. The client ID only counts distinct users
- * per day; it is keyed with a Worker secret and the date, so it can't be reversed to an address or
- * linked across days.
+ * One data point per API call in STATS, and one more call in today's LIVE counts, both shown at
+ * /stats. It records how the API is used, never what is classified: no text, labels, or IP
+ * address. The client ID only counts distinct users per day; it is keyed with a Worker secret and
+ * the date, so it can't be reversed to an address or linked across days.
  *
  *   blobs:   endpoint, status, tier (free|key), source, client kind, country, other site's host
  *   doubles: units, Worker latency ms, RunPod queue and cold start ms, GPU ms
  */
-async function record(
-  stats: AnalyticsEngineDataset,
-  request: Request,
-  url: URL,
-  call: ApiCall,
-  ms: number,
-  secret: string,
-): Promise<void> {
+async function record(request: Request, url: URL, call: ApiCall, ms: number, env: Env): Promise<void> {
   const origin = request.headers.get("Origin");
   const source = !origin ? "direct" : origin === url.origin ? "playground" : "website";
   // Without the secret (local dev) the call is still counted, just not per client.
   const day = new Date().toISOString().slice(0, 10);
-  const client = secret ? await dailyClient(request, day, secret) : "none";
-  // Queues the point without waiting for storage.
-  stats.writeDataPoint({
-    blobs: [
-      routeOf(request.method, url.pathname, url.search),
-      String(call.response.status),
-      call.keyed ? "key" : "free",
-      source,
-      clientKind(request.headers.get("User-Agent") ?? ""),
-      String(request.cf?.country ?? ""),
-      source === "website" ? hostOf(origin) : "",
-    ],
-    doubles: [call.units, ms, call.job?.delayTime ?? 0, call.job?.executionTime ?? 0],
-    indexes: [client],
-  });
+  const client = env.RUNPOD_API_KEY ? await dailyClient(request, day, env.RUNPOD_API_KEY) : "none";
+  const status = call.response.status;
+  try {
+    // Queues the point without waiting for storage.
+    env.STATS?.writeDataPoint({
+      blobs: [
+        routeOf(request.method, url.pathname, url.search),
+        String(status),
+        call.keyed ? "key" : "free",
+        source,
+        clientKind(request.headers.get("User-Agent") ?? ""),
+        String(request.cf?.country ?? ""),
+        source === "website" ? hostOf(origin) : "",
+      ],
+      doubles: [call.units, ms, call.job?.delayTime ?? 0, call.job?.executionTime ?? 0],
+      indexes: [client],
+    });
+  } catch (error) {
+    // The live count still goes ahead.
+    console.error("API call not recorded", error);
+  }
+  await liveStats(env).add({ units: call.units, status, keyed: call.keyed, client });
 }
+
+// The app's own fixed routes (FastAPI adds the docs). Anything else is named by its shape, so a
+// caller can't put words on the public page by calling a made-up path or method.
+const ROUTES = new Set(["/v1/score", "/v1/systemone", "/v1/models", "/docs", "/redoc", "/openapi.json"]);
+const METHODS = new Set(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"]);
 
 /** The route an API call used, without its labels or text. */
 export function routeOf(method: string, path: string, search: string): string {
-  if (path.startsWith("/v1/") || path === "/docs" || path === "/openapi.json") {
-    return `${method} ${path}`;
-  }
+  if (!METHODS.has(method)) return "other";
+  if (ROUTES.has(path)) return `${method} ${path}`;
   if (path === "/") return method === "POST" ? "POST /" : search ? "GET /?labels" : "GET /";
   return path.split("/").filter(Boolean).length >= 2 ? `${method} /<labels>/<text>` : "other";
 }
