@@ -1,0 +1,19 @@
+# sifty
+
+> Free zero-shot text classification API. Send text and 2-26 labels you choose; get back the most likely label, or a probability for every label. No training, no account, no API key.
+
+Qwen3-8B scores each label from next-token probabilities averaged across label orderings; it never generates text. Free tier: 1,000 units per IP per UTC day (a batch counts each text, a System One call each question), plus a shared daily cap. Over the limit answers 429 with Retry-After. The first request after a quiet spell can take up to a minute while a GPU wakes. Requests pass through Cloudflare and RunPod; do not send sensitive data.
+
+## API
+
+- `GET https://sifty.dev/<label>,<label>/<text>`: the label as plain text. `+` is a space; percent-encode `,` `+` `/` inside labels. Example: `https://sifty.dev/spam,not+spam/Win+a+free+iPhone` returns `spam`.
+- `GET https://sifty.dev/?labels=<a,b>&text=<text>`: the same, as query parameters.
+- Add `?verbose=1` to either GET for JSON: `{model, results: [{label, confidence, scores, ms}], usage}`.
+- `POST https://sifty.dev/` with `{"input": "text" or ["up to 32 texts"], "labels": ["a", "b"]}`: one result per text.
+- `POST https://sifty.dev/v1/score`: full request `{context, question, options: [{id, text}]}` and response with per-option probabilities.
+- `POST https://sifty.dev/v1/systemone`: the TypeSafe System One protocol; the `typesafe-sdk` Python client works with `base_url="https://sifty.dev"` and `api_key="free"`.
+
+## Links
+
+- [Playground and docs](https://sifty.dev/)
+- [Live usage statistics](https://sifty.dev/stats)

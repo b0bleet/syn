@@ -1,0 +1,14 @@
+# Every path except the page, its files, and /stats is an API call that runs a GPU job.
+User-agent: *
+Allow: /$
+Allow: /stats
+Allow: /og.png
+Allow: /favicon
+Allow: /apple-touch-icon.png
+Allow: /icon-
+Allow: /site.webmanifest
+Allow: /llms.txt
+Allow: /sitemap.xml
+Disallow: /
+
+Sitemap: https://sifty.dev/sitemap.xml

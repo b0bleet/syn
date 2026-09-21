@@ -3,10 +3,68 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>sifty: classify anything with one URL</title>
-<meta name="description" content="Free zero-shot text classification API. Send text and labels, get a label back. No training, no prompts, no key.">
+<title>sifty: free text classification API with one URL</title>
+<meta name="description" content="Classify any text with your own labels using one URL. Free zero-shot API with a probability for every label. No training, no account, no API key.">
+<link rel="canonical" href="https://sifty.dev/">
+<meta name="robots" content="index, follow, max-image-preview:large">
+<meta name="application-name" content="sifty">
+<meta name="apple-mobile-web-app-title" content="sifty">
 <meta name="color-scheme" content="light">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='white'/%3E%3Cpath d='M4 5h24v5H4zm4 8h16v5H8zm5 8h6v6h-6z' fill='black'/%3E%3C/svg%3E">
+<meta name="theme-color" content="#ffffff">
+<meta name="format-detection" content="telephone=no">
+
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="sifty">
+<meta property="og:locale" content="en_US">
+<meta property="og:url" content="https://sifty.dev/">
+<meta property="og:title" content="sifty: Text in. Label out.">
+<meta property="og:description" content="Free text classification API. Send text and your own labels in one URL, get the label back. No account or API key.">
+<meta property="og:image" content="https://sifty.dev/og.png">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="sifty: Text in. Label out. curl sifty.dev/spam,not+spam/Win+a+free+iPhone answers spam.">
+
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="sifty: Text in. Label out.">
+<meta name="twitter:description" content="Free text classification API. Send text and your own labels in one URL, get the label back. No account or API key.">
+<meta name="twitter:image" content="https://sifty.dev/og.png">
+<meta name="twitter:image:alt" content="sifty: Text in. Label out. curl sifty.dev/spam,not+spam/Win+a+free+iPhone answers spam.">
+
+<link rel="icon" href="/favicon.ico" sizes="48x48">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<link rel="alternate" type="text/plain" href="/llms.txt" title="API summary for language models">
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "WebSite",
+      "@id": "https://sifty.dev/#website",
+      "url": "https://sifty.dev/",
+      "name": "sifty",
+      "description": "Free text classification API with one URL.",
+      "inLanguage": "en"
+    },
+    {
+      "@type": "WebApplication",
+      "@id": "https://sifty.dev/#app",
+      "name": "sifty",
+      "url": "https://sifty.dev/",
+      "description": "Classify any text with your own labels using one URL. Free zero-shot API with a probability for every label. No training, no account, no API key.",
+      "image": "https://sifty.dev/og.png",
+      "applicationCategory": "DeveloperApplication",
+      "operatingSystem": "Any",
+      "isAccessibleForFree": true,
+      "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+      "isPartOf": { "@id": "https://sifty.dev/#website" }
+    }
+  ]
+}
+</script>
 <style>
 * { box-sizing: border-box; }
 :root { color-scheme: light; font: 14px/1.65 "Lucida Console", Monaco, monospace; color: #000; background: #fff; }
@@ -83,7 +141,7 @@ pre { overflow: auto; border: 1px solid #000; padding: 16px; font-size: 12px; }
 <div class="site">
   <header>
     <a class="logo" href="#">sifty</a>
-    <nav aria-label="Navigation"><a id="docs-link" href="#docs">Docs</a><a href="https://github.com/b0bleet/syn">GitHub</a></nav>
+    <nav aria-label="Navigation"><a id="docs-link" href="#docs">Docs</a><a href="/stats">Stats</a><a href="https://github.com/b0bleet/syn">GitHub</a></nav>
   </header>
   <main>
     <section id="playground" aria-labelledby="heading">

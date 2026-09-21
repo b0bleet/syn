@@ -8,6 +8,8 @@
   // API to everything else; it hands page requests to ASSETS.
   "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": true },
   "durable_objects": { "bindings": [{ "name": "QUOTA", "class_name": "Quota" }] },
+  // One data point per API call: how the API is used, never what is classified. Shown at /stats.
+  "analytics_engine_datasets": [{ "binding": "STATS", "dataset": "syn_api_calls" }],
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Quota"] }],
   "vars": {
     // Free tier, in units per UTC day (one per request, or per text in a batch). The page in
@@ -24,4 +26,6 @@
   //   npx wrangler secret put RUNPOD_ENDPOINT_ID
   //   npx wrangler secret put RUNPOD_API_KEY
   //   npx wrangler secret put API_KEYS           (optional: comma-separated keys with no limits)
+  //   npx wrangler secret put STATS_ACCOUNT_ID   (optional, for /stats: the Cloudflare account id)
+  //   npx wrangler secret put STATS_API_TOKEN    (optional, for /stats: "Account Analytics: Read")
 }

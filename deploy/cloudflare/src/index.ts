@@ -6,16 +6,18 @@
  * starts), and returns the response the Python app produced there.
  *
  * Free for everyone: requests without a known key are counted per client IP per UTC day, and
- * against a global daily cap that bounds GPU spend. Keys listed in API_KEYS skip both. Browsers
- * asking for `/` get the page in public/. /health reports RunPod worker counts without waking a
- * GPU.
+ * against a global daily cap that bounds GPU spend. Keys listed in API_KEYS skip both. `/` is the
+ * page in public/, and its files (icons, preview image, robots.txt) are served as they are;
+ * neither is counted or reaches a GPU. /health reports RunPod worker counts without waking a GPU.
+ * Every API call is recorded, without its content, in the STATS dataset; /stats shows it publicly.
  */
 
 import type { Quota } from "./quota";
+import { type StatsEnv, statsPage } from "./stats";
 
 export { Quota } from "./quota";
 
-export interface Env {
+export interface Env extends StatsEnv {
   /** Secret: the RunPod serverless endpoint running deploy/runpod/handler.py. */
   RUNPOD_ENDPOINT_ID: string;
   /** Secret: the RunPod API key. */
@@ -33,6 +35,8 @@ export interface Env {
   POLL_SECONDS?: string;
   /** Defaults to RunPod; override only to test against a local stand-in. */
   RUNPOD_API_BASE?: string;
+  /** Analytics Engine dataset with one data point per API call, shown at /stats. */
+  STATS?: AnalyticsEngineDataset;
 }
 
 interface Job {
@@ -40,6 +44,17 @@ interface Job {
   status?: string;
   output?: unknown;
   error?: unknown;
+  /** Milliseconds RunPod held the job before a GPU worker took it, cold start included. */
+  delayTime?: number;
+  /** Milliseconds the GPU worker spent on the job. */
+  executionTime?: number;
+}
+
+interface ApiCall {
+  response: Response;
+  units: number;
+  keyed: boolean;
+  job?: Job;
 }
 
 interface HttpOutput {
@@ -56,6 +71,24 @@ interface Charge {
   headers: Record<string, string>;
 }
 
+/**
+ * Every file in public/ other than index.html; keep in step with that directory. Any other path
+ * is an API call, so a file missing here would run a GPU job and cost the caller a unit.
+ */
+export const STATIC_FILES = new Set([
+  "/robots.txt",
+  "/sitemap.xml",
+  "/llms.txt",
+  "/site.webmanifest",
+  "/og.png",
+  "/favicon.ico",
+  "/favicon.svg",
+  "/apple-touch-icon.png",
+  "/icon-192.png",
+  "/icon-512.png",
+]);
+// Command-line clients get the app's plain-text usage at `/` unless they ask for HTML.
+const COMMAND_LINE = /^(curl|wget|httpie|xh)\//i;
 const PENDING = new Set(["IN_QUEUE", "IN_PROGRESS"]);
 // What callers see when the GPU side fails; the specifics go to the Worker's logs.
 const UNAVAILABLE = "The scoring service is temporarily unavailable. Please try again shortly.";
@@ -91,42 +124,141 @@ export default {
       });
     }
     if (url.pathname === "/health") return withCors(await health(env));
-    if (request.method === "GET" && url.pathname === "/" && !url.search && wantsHtml(request)) {
+    const reading = request.method === "GET" || request.method === "HEAD";
+    if (reading && url.pathname === "/stats") return statsPage(url, env);
+    if (reading && STATIC_FILES.has(url.pathname)) return env.ASSETS.fetch(request);
+    if (reading && url.pathname === "/" && !url.search && wantsPage(request)) {
       return env.ASSETS.fetch(request);
     }
-    const body =
-      request.method === "GET" || request.method === "HEAD" ? null : await request.text();
-    let charge: Charge | null = null;
-    if (!(await hasKey(request, env))) {
-      const metered = await meter(request, env, units(request.method, url.pathname, body));
-      if (metered instanceof Response) return withCors(metered);
-      charge = metered;
-    }
-    const http = {
-      method: request.method,
-      // pathname keeps percent escapes, so an escaped comma inside a label reaches the parser.
-      path: url.pathname + url.search,
-      headers: { "content-type": request.headers.get("content-type") ?? "application/json" },
-      body,
-    };
-    try {
-      const output = await runJob(env, { http });
-      if (!isHttpOutput(output)) throw new JobError("GPU worker returned no HTTP response", 502);
-      // The app failed on our side (its backend, not the request): the caller pays nothing.
-      if (charge && output.status >= 500) await refund(charge);
-      return withCors(
-        new Response(output.body, {
-          status: output.status,
-          headers: { ...output.headers, ...charge?.headers },
-        }),
+    const started = Date.now();
+    const call = await api(request, env, url);
+    if (env.STATS) {
+      const ms = Date.now() - started;
+      // Stats must never cost a caller their answer.
+      await record(env.STATS, request, url, call, ms, env.RUNPOD_API_KEY).catch((error) =>
+        console.error("API call not recorded", error),
       );
-    } catch (error) {
-      if (!(error instanceof JobError)) throw error;
-      if (charge) await refund(charge);
-      return withCors(json({ detail: error.message }, error.status));
     }
+    return call.response;
   },
 };
+
+async function api(request: Request, env: Env, url: URL): Promise<ApiCall> {
+  const body = request.method === "GET" || request.method === "HEAD" ? null : await request.text();
+  const cost = units(request.method, url.pathname, body);
+  const keyed = await hasKey(request, env);
+  let charge: Charge | null = null;
+  if (!keyed) {
+    const metered = await meter(request, env, cost);
+    if (metered instanceof Response) return { response: withCors(metered), units: cost, keyed };
+    charge = metered;
+  }
+  const http = {
+    method: request.method,
+    // pathname keeps percent escapes, so an escaped comma inside a label reaches the parser.
+    path: url.pathname + url.search,
+    headers: { "content-type": request.headers.get("content-type") ?? "application/json" },
+    body,
+  };
+  try {
+    const job = await runJob(env, { http });
+    const output = job.output;
+    if (!isHttpOutput(output)) throw new JobError("GPU worker returned no HTTP response", 502);
+    // The app failed on our side (its backend, not the request): the caller pays nothing.
+    if (charge && output.status >= 500) await refund(charge);
+    const response = new Response(output.body, {
+      status: output.status,
+      headers: { ...output.headers, ...charge?.headers },
+    });
+    return { response: withCors(response), units: cost, keyed, job };
+  } catch (error) {
+    if (!(error instanceof JobError)) throw error;
+    if (charge) await refund(charge);
+    return { response: withCors(json({ detail: error.message }, error.status)), units: cost, keyed };
+  }
+}
+
+/**
+ * One data point per API call, shown at /stats. It records how the API is used, never
+ * what is classified: no text, labels, or IP address. The client ID only counts distinct users
+ * per day; it is keyed with a Worker secret and the date, so it can't be reversed to an address or
+ * linked across days.
+ *
+ *   blobs:   endpoint, status, tier (free|key), source, client kind, country, other site's host
+ *   doubles: units, Worker latency ms, RunPod queue and cold start ms, GPU ms
+ */
+async function record(
+  stats: AnalyticsEngineDataset,
+  request: Request,
+  url: URL,
+  call: ApiCall,
+  ms: number,
+  secret: string,
+): Promise<void> {
+  const origin = request.headers.get("Origin");
+  const source = !origin ? "direct" : origin === url.origin ? "playground" : "website";
+  // Without the secret (local dev) the call is still counted, just not per client.
+  const day = new Date().toISOString().slice(0, 10);
+  const client = secret ? await dailyClient(request, day, secret) : "none";
+  // Queues the point without waiting for storage.
+  stats.writeDataPoint({
+    blobs: [
+      routeOf(request.method, url.pathname, url.search),
+      String(call.response.status),
+      call.keyed ? "key" : "free",
+      source,
+      clientKind(request.headers.get("User-Agent") ?? ""),
+      String(request.cf?.country ?? ""),
+      source === "website" ? hostOf(origin) : "",
+    ],
+    doubles: [call.units, ms, call.job?.delayTime ?? 0, call.job?.executionTime ?? 0],
+    indexes: [client],
+  });
+}
+
+/** The route an API call used, without its labels or text. */
+export function routeOf(method: string, path: string, search: string): string {
+  if (path.startsWith("/v1/") || path === "/docs" || path === "/openapi.json") {
+    return `${method} ${path}`;
+  }
+  if (path === "/") return method === "POST" ? "POST /" : search ? "GET /?labels" : "GET /";
+  return path.split("/").filter(Boolean).length >= 2 ? `${method} /<labels>/<text>` : "other";
+}
+
+/** A coarse client family from the User-Agent, for telling scripts from browsers. */
+export function clientKind(userAgent: string): string {
+  if (!userAgent) return "none";
+  if (/^curl\//i.test(userAgent)) return "curl";
+  if (/typesafe/i.test(userAgent)) return "typesafe-sdk";
+  if (/python|httpx|aiohttp|urllib/i.test(userAgent)) return "python";
+  if (/node|undici|axios/i.test(userAgent)) return "node";
+  if (/bot|crawler|spider/i.test(userAgent)) return "bot";
+  if (/mozilla/i.test(userAgent)) return "browser";
+  return "other";
+}
+
+function hostOf(origin: string | null): string {
+  try {
+    return new URL(origin ?? "").host;
+  } catch {
+    return "invalid";
+  }
+}
+
+async function dailyClient(request: Request, day: string, secret: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const ip = request.headers.get("CF-Connecting-IP") ?? "unknown";
+  const message = `stats-v1:${day}:${ip.includes(":") ? ipv6Prefix(ip) : ip}`;
+  const mac = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(message));
+  // 16 bytes is plenty to count distinct clients, and fits the 96-byte index limit.
+  return Array.from(new Uint8Array(mac).slice(0, 16), (b) => b.toString(16).padStart(2, "0")).join("");
+}
 
 /** Units a request costs: one, or one per text in a batch or per question in System One. */
 export function units(method: string, path: string, body: string | null): number {
@@ -209,7 +341,7 @@ function endpoint(env: Env): string {
   return `${env.RUNPOD_API_BASE ?? "https://api.runpod.ai/v2"}/${env.RUNPOD_ENDPOINT_ID}`;
 }
 
-async function runJob(env: Env, input: unknown): Promise<unknown> {
+async function runJob(env: Env, input: unknown): Promise<Job> {
   const base = endpoint(env);
   const headers = {
     Authorization: `Bearer ${env.RUNPOD_API_KEY}`,
@@ -236,7 +368,7 @@ async function runJob(env: Env, input: unknown): Promise<unknown> {
     console.error("RunPod job failed", job.id, job.status, job.error);
     throw new JobError(UNAVAILABLE, 502);
   }
-  return job.output;
+  return job;
 }
 
 async function runpod(pending: Promise<Response>): Promise<Job> {
@@ -288,8 +420,13 @@ async function hasKey(request: Request, env: Env): Promise<boolean> {
   return match;
 }
 
-function wantsHtml(request: Request): boolean {
-  return (request.headers.get("Accept") ?? "").includes("text/html");
+/**
+ * Browsers, and link-preview bots, which often accept any type without naming HTML yet need the
+ * page's title and preview tags. Only command-line tools not asking for HTML get the usage text.
+ */
+function wantsPage(request: Request): boolean {
+  if ((request.headers.get("Accept") ?? "").includes("text/html")) return true;
+  return !COMMAND_LINE.test(request.headers.get("User-Agent") ?? "");
 }
 
 async function sha256(text: string): Promise<Uint8Array> {
