@@ -59,6 +59,38 @@ def token() -> str | None:
     return os.environ.get("HF_TOKEN") or None
 
 
+def resolve_pretrained(model: str, revision: str | None = None) -> tuple[str, str | None]:
+    """A model id unchanged, or an `hf://<user>/<repo>/<directory>` downloaded for from_pretrained.
+
+    The directory is the snapshot path, so a pointer backbone stored under
+    `pointers/<model>/<run>/backbone` loads with
+    `SYN_MODEL=hf://<user>/<repo>/pointers/<model>/<run>/backbone`.
+    """
+    if not is_hub_path(model):
+        return model, revision
+    ref = parse_hub_path(model)
+    from huggingface_hub import snapshot_download
+
+    snapshot = Path(
+        snapshot_download(
+            ref.repo_id,
+            allow_patterns=[f"{ref.path}/**", f"{ref.path}/*"] if ref.path else None,
+            revision=ref.revision or revision,
+            token=token(),
+        )
+    )
+    folder = snapshot / ref.path if ref.path else snapshot
+    if not folder.is_dir():
+        raise FileNotFoundError(f"{model} did not download a directory")
+    return str(folder), None
+
+
+def pretrained_call(model: str, revision: str | None = None) -> tuple[str, dict]:
+    """`(model, kwargs)` for `from_pretrained`. A resolved directory carries no revision kwarg."""
+    model, revision = resolve_pretrained(model, revision)
+    return model, ({"revision": revision} if revision else {})
+
+
 def download_file(uri: str) -> Path:
     """One file from the Hub into the Hub cache; returns its local path."""
     from huggingface_hub import hf_hub_download

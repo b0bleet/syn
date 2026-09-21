@@ -322,6 +322,7 @@ def train_pointer(
     *,
     calibration=None,
     test=None,
+    indomain=None,
     rank: int = 16,
     head_dim: int = 256,
     epochs: int = 2,
@@ -362,9 +363,10 @@ def train_pointer(
     config = resolve_config(settings)
     if config.model_type != "qwen3":
         raise ValueError("The pointer readout currently supports Qwen3 causal LMs only")
-    tokenizer = AutoTokenizer.from_pretrained(
-        settings.model, revision=settings.revision, trust_remote_code=False
-    )
+    from .artifacts import pretrained_call
+
+    model_id, model_extra = pretrained_call(settings.model, settings.revision)
+    tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=False, **model_extra)
     builder = PromptBuilder(tokenizer, settings.max_prompt_tokens, settings.prompt_format)
     delimiters = delimiter_ids(tokenizer)
     device = settings.device
@@ -375,6 +377,7 @@ def train_pointer(
     val_rows = load_rows(validation)
     cal_rows = load_rows(calibration) if calibration else None
     test_rows = load_rows(test) if test else None
+    indomain_rows = load_rows(indomain) if indomain else None
     anchors = load_anchors(anchor) if anchor else None
     if anchors is not None:
         from .evaluation import example_digest
@@ -384,12 +387,12 @@ def train_pointer(
 
     log(f"loading {settings.model} @ {settings.revision} on {device} ({dtype})")
     lm = AutoModelForCausalLM.from_pretrained(
-        settings.model,
-        revision=settings.revision,
+        model_id,
         config=config,
         dtype=dtype,
         trust_remote_code=False,
         attn_implementation="sdpa" if device == "cuda" else "eager",
+        **model_extra,
     ).to(device)
     peft_model = get_peft_model(
         lm,
@@ -511,6 +514,7 @@ def train_pointer(
     temperature = fit["temperature"]
     final = evaluate(val_rows, temperature)
     held_out = evaluate(test_rows, temperature) if test_rows else None
+    in_domain = evaluate(indomain_rows, temperature) if indomain_rows else None
     log(json.dumps({"temperature": temperature, "val_nll": final.get("negative_log_likelihood")}))
     if held_out is not None:
         log(
@@ -521,6 +525,8 @@ def train_pointer(
                 }
             )
         )
+    if in_domain is not None:
+        log(json.dumps({"in_domain_top1": in_domain.get("top1")}))
 
     backbone_dir = out_dir / "backbone"
     merged = peft_model.merge_and_unload()
@@ -565,6 +571,7 @@ def train_pointer(
                 "ece_10_bins": final.get("ece_10_bins"),
             },
             "held_out": held_out,
+            "in_domain": in_domain,
             "history": history,
         },
     )
@@ -573,6 +580,7 @@ def train_pointer(
         "pointer": str(head_path),
         "best_val_top1": best,
         "held_out_top1": None if held_out is None else held_out.get("top1"),
+        "in_domain_top1": None if in_domain is None else in_domain.get("top1"),
         "temperature": temperature,
         "temperature_fit": fit,
         "epochs": epochs,

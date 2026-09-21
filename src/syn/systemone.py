@@ -12,7 +12,6 @@ Each question becomes one option-scoring request over the same state:
 Any model name is accepted and answered by the configured checkpoint, which the response names.
 """
 
-import json
 from collections.abc import Callable
 from typing import Annotated, Any, Literal
 
@@ -109,8 +108,33 @@ class ModelList(StrictModel):
     models: list[ModelInfo]
 
 
-def render(content: JSONContent) -> str:
-    return content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)
+def render(content: JSONContent, indent: int = 0) -> str:
+    """Flatten a string, object, or array into the text the model sees.
+
+    Field names stay as labels, one `key: value` line each. Nested objects and arrays are
+    indented under their key. A string is kept as written.
+    """
+    pad = "  " * indent
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, bool):
+        return "true" if content else "false"
+    if isinstance(content, (int, float)):
+        return str(content)
+    if isinstance(content, list):
+        return "\n".join(f"{pad}- {render(item, indent + 1).lstrip()}" for item in content)
+    if isinstance(content, dict):
+        lines = []
+        for key, value in content.items():
+            if isinstance(value, (dict, list)):
+                rendered = render(value, indent + 1)
+                lines.append(f"{pad}{key}:\n{rendered}" if rendered else f"{pad}{key}:")
+            else:
+                lines.append(f"{pad}{key}: {render(value)}")
+        return "\n".join(lines)
+    return str(content)
 
 
 def described(name: str, description: JSONContent | None) -> str:

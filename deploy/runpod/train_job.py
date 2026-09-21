@@ -32,10 +32,15 @@ every one with train, validation, and test), SYN_TRAIN_SUITES, SYN_TRAIN_RUN (de
 timestamp), SYN_TRAIN_LIMIT_PER_SOURCE (2000), SYN_TRAIN_EPOCHS (8), SYN_TRAIN_RANK (256),
 SYN_TRAIN_LR (5e-4), SYN_TRAIN_SEED (7), SYN_TRAIN_P_NONE (0.1), SYN_TRAIN_P_NONE_DISTRACT
 (0.12), SYN_TRAIN_P_DISTRACT (0.15), SYN_TRAIN_ORDINAL_WEIGHT (1.0).
-Pointer task: SYN_TRAIN_POINTER_RANK (16), SYN_TRAIN_POINTER_EPOCHS (2),
-SYN_TRAIN_POINTER_LR (5e-5), SYN_TRAIN_POINTER_BATCH (1), SYN_TRAIN_POINTER_ACCUMULATE (8),
-SYN_TRAIN_POINTER_MAX_TOKENS (1024), SYN_TRAIN_POINTER_CHECKPOINTING (1). Rows come from
-pointer-data/<source>/{train,validation,calibration}.jsonl, not from data/.
+Pointer task: SYN_TRAIN_POINTER_RANK (16), SYN_TRAIN_POINTER_EPOCHS (2, or --epochs),
+SYN_TRAIN_POINTER_LR (5e-5), SYN_TRAIN_POINTER_BATCH (2), SYN_TRAIN_POINTER_ACCUMULATE (4),
+SYN_TRAIN_POINTER_MAX_TOKENS (1024), SYN_TRAIN_POINTER_CHECKPOINTING (1),
+SYN_TRAIN_ANCHOR (1), SYN_TRAIN_ANCHOR_WEIGHT (1), SYN_TRAIN_ANCHOR_ORDERINGS (1).
+Rows come from pointer-data/<source>/{train,validation,calibration}.jsonl, not from data/.
+test.jsonl beside those splits is scored and not trained on. Before training, the base
+model's letters readout writes an anchor file and the pointer loss stays near it.
+Serve with SYN_MODEL=hf://<repo>/pointers/<model>/<run>/backbone and
+SYN_POINTER_PATH=hf://<repo>/pointers/<model>/<run>/pointer.safetensors.
 
 Memory: features are float16 and stay in RAM while heads train. At hidden size 4096 that is
 about one megabyte per row, so 2000 rows per source over six sources needs around 20 GB.
@@ -292,6 +297,79 @@ def summary(report: dict, model: str, run_dir: Path, serve_path: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+def write_anchors(train_files: list[Path], out: Path, limit_per_source: int, log) -> Path | None:
+    """Score the training rows with the frozen base model and write an anchor file.
+
+    One letters ordering per row. The file matches what `syn train-pointer --anchor` reads.
+    Returns None when anchoring is off or no row could be scored. The model is dropped
+    before the caller loads it again for training.
+    """
+    if setting("ANCHOR", "1") == "0":
+        log("anchors off")
+        return None
+    import gc
+
+    from syn.backends import LocalBackend, resolve_config, revision_commit
+    from syn.config import Settings
+    from syn.evaluation import example_digest
+    from syn.pointer import load_rows
+    from syn.prompt import PromptBuilder
+    from syn.scoring import Scorer
+
+    settings = Settings(readout="letters", orderings=setting("ANCHOR_ORDERINGS", 1, int))
+    rows = load_rows(train_files, limit_per_source)
+    config = resolve_config(settings)
+    from transformers import AutoTokenizer
+
+    from syn.artifacts import pretrained_call
+
+    model_id, extra = pretrained_call(settings.model, settings.revision)
+    tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=False, **extra)
+    builder = PromptBuilder(tokenizer, settings.max_prompt_tokens, settings.prompt_format)
+    log(f"scoring {len(rows)} anchor rows with {settings.model}")
+    backend = LocalBackend(settings, config)
+    scorer = Scorer(settings, builder, backend, revision_commit(config))
+    out.parent.mkdir(parents=True, exist_ok=True)
+    scored = 0
+    try:
+        with out.open("w") as handle:
+            for example in rows:
+                try:
+                    response = scorer.score(example.request)
+                except (ValueError, RuntimeError) as exc:
+                    log(f"anchor skip: {exc}")
+                    continue
+                handle.write(
+                    json.dumps(
+                        {
+                            "example_sha256": example_digest(example),
+                            "response": response.model_dump(),
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n"
+                )
+                scored += 1
+                if scored % 500 == 0:
+                    log(f"anchors {scored}/{len(rows)}")
+    finally:
+        backend.close()
+        del backend, scorer, tokenizer
+        gc.collect()
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except ImportError:
+            pass
+    if not scored:
+        log("no anchor rows scored")
+        return None
+    log(f"anchors {scored}/{len(rows)} -> {out}")
+    return out
+
+
 def run_pointer(repo: str | None, root: Path, model: str, model_slug: str, run: str, log) -> None:
     """Adapt the backbone and train the pointer head on pointer-data/, then score the held-out file."""
     from syn.pointer import train_pointer
@@ -304,18 +382,28 @@ def run_pointer(repo: str | None, root: Path, model: str, model_slug: str, run: 
         + ", ".join(f"{split} {len(paths)}" for split, paths in files.items() if paths)
     )
     run_dir = root / "pointers" / model_slug / run
+    limit = setting("LIMIT_PER_SOURCE", 0, int)
+    anchor = write_anchors(files["train"], root / "anchors" / f"{run}.jsonl", limit, log)
+    indomain = [
+        path.with_name("test.jsonl")
+        for path in files["train"]
+        if has_rows(path.with_name("test.jsonl"))
+    ]
     report = train_pointer(
         files["train"],
         files["validation"],
         run_dir,
         calibration=files["calibration"] or None,
         test=held_out,
+        indomain=indomain or None,
+        anchor=anchor,
+        anchor_weight=setting("ANCHOR_WEIGHT", 1.0, float) if anchor else 0.0,
         rank=setting("POINTER_RANK", 16, int),
         head_dim=setting("POINTER_HEAD_DIM", 256, int),
-        epochs=setting("POINTER_EPOCHS", 2, int),
+        epochs=setting("POINTER_EPOCHS", setting("EPOCHS", 2, int), int),
         lr=setting("POINTER_LR", 5e-5, float),
-        batch_size=setting("POINTER_BATCH", 1, int),
-        accumulate=setting("POINTER_ACCUMULATE", 8, int),
+        batch_size=setting("POINTER_BATCH", 2, int),
+        accumulate=setting("POINTER_ACCUMULATE", 4, int),
         weight_decay=setting("POINTER_WEIGHT_DECAY", 0.01, float),
         seed=setting("SEED", 7, int),
         augment=Augment(
@@ -325,7 +413,7 @@ def run_pointer(repo: str | None, root: Path, model: str, model_slug: str, run: 
         ),
         ordinal_weight=setting("ORDINAL_WEIGHT", 1.0, float),
         max_tokens=setting("POINTER_MAX_TOKENS", 1024, int),
-        limit_per_source=setting("LIMIT_PER_SOURCE", 0, int),
+        limit_per_source=limit,
         checkpointing=setting("POINTER_CHECKPOINTING", "1") != "0",
         log=log,
     )
@@ -336,13 +424,25 @@ def run_pointer(repo: str | None, root: Path, model: str, model_slug: str, run: 
     ]
     if report.get("held_out_top1") is not None:
         lines.append(f"Held-out top-1 {report['held_out_top1']:.3f} on `{held_out}`.")
-    serve = (
-        f"SYN_MODEL={run_dir / 'backbone'} SYN_READOUT=pointer "
-        f"SYN_POINTER_PATH={run_dir / 'pointer.safetensors'}"
-    )
-    lines += ["", f"Serve with `{serve}`."]
+    if report.get("in_domain_top1") is not None:
+        lines.append(f"In-domain test top-1 {report['in_domain_top1']:.3f}.")
     if repo:
-        lines.append(f"The run is in the store at `pointers/{model_slug}/{run}/`.")
+        serve = (
+            f"SYN_MODEL=hf://{repo}/pointers/{model_slug}/{run}/backbone "
+            f"SYN_READOUT=pointer "
+            f"SYN_POINTER_PATH=hf://{repo}/pointers/{model_slug}/{run}/pointer.safetensors"
+        )
+        lines += [
+            "",
+            f"Serve with `{serve}`.",
+            f"The run is in the store at `pointers/{model_slug}/{run}/`.",
+        ]
+    else:
+        serve = (
+            f"SYN_MODEL={run_dir / 'backbone'} SYN_READOUT=pointer "
+            f"SYN_POINTER_PATH={run_dir / 'pointer.safetensors'}"
+        )
+        lines += ["", f"Serve with `{serve}`."]
     text = "\n".join(lines) + "\n"
     (run_dir / "RESULT.md").write_text(text)
     print(text, flush=True)

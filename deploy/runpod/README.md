@@ -87,12 +87,19 @@ uv run python scripts/runpod_train.py --model Qwen/Qwen3-8B --hf-repo <user>/syn
   `--stop <pod-id>`.
 - `--task pointer` adapts the backbone and trains the pointer head. It reads
   `pointer-data/<source>/{train,validation,calibration}.jsonl` from the store, scores
-  `pointer-data/transfer-dev.jsonl` when that file is present, and pushes the merged
-  backbone plus `pointer.safetensors` to `pointers/<model>/<run>/`. Two epochs, adapter
-  rank 16, batch 1 with 8 accumulation steps, and gradient checkpointing. Serve with
-  `SYN_MODEL` pointed at that run's `backbone/` directory, `SYN_READOUT=pointer`, and
-  `SYN_POINTER_PATH` pointed at `pointer.safetensors`. The head task does not read
-  `pointer-data/`.
+  `pointer-data/transfer-dev.jsonl` and each source's `test.jsonl`, and pushes the merged
+  backbone plus `pointer.safetensors` to `pointers/<model>/<run>/`. `--epochs` applies
+  here too (default 2). Adapter rank 16, batch 2 with 4 accumulation steps, and gradient
+  checkpointing. Before training, the base model's letters readout scores the training
+  rows once and that distribution anchors the pointer loss (`SYN_TRAIN_ANCHOR=0` skips it).
+  Serve from the store with
+  `SYN_MODEL=hf://<user>/<repo>/pointers/<model>/<run>/backbone`,
+  `SYN_READOUT=pointer`, and
+  `SYN_POINTER_PATH=hf://<user>/<repo>/pointers/<model>/<run>/pointer.safetensors`.
+  The head task does not read `pointer-data/`.
+- `pointer-data/README.md` in the store records where those rows came from. Choice questions
+  with more than 26 options are dropped on import. Structured state and criteria are flattened
+  to labeled lines, the same rendering `syn serve` uses.
 
 ## Notes
 

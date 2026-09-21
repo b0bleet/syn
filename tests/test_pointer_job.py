@@ -62,9 +62,20 @@ def _args(**overrides):
 
 def test_launcher_marks_a_pointer_pod(monkeypatch):
     monkeypatch.setenv("HF_TOKEN", "test-token")
-    pointer = runpod_train.build_request(_args(task="pointer", hf_repo="jolobuild/syn-training"))
+    pointer = runpod_train.build_request(
+        _args(task="pointer", hf_repo="jolobuild/syn-training", epochs=None)
+    )
     assert pointer["env"]["SYN_TRAIN_TASK"] == "pointer"
+    assert pointer["env"]["SYN_TRAIN_POINTER_EPOCHS"] == "2"
     assert "local,hub,train" in pointer["dockerStartCmd"][-1]
+    assert (
+        runpod_train.store_prefix("pointer", "jolobuild/syn-training", None)
+        == "hf://jolobuild/syn-training/pointers/"
+    )
+    assert (
+        runpod_train.store_prefix("head", "jolobuild/syn-training", None)
+        == "hf://jolobuild/syn-training/heads/"
+    )
     head = runpod_train.build_request(_args())
     assert head["env"]["SYN_TRAIN_TASK"] == "head"
     assert 'extras="local,hub"' in head["dockerStartCmd"][-1]

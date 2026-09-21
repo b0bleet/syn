@@ -65,11 +65,13 @@ def build_request(args: argparse.Namespace) -> dict:
         "SYN_TRAIN_TASK": args.task,
         "SYN_TRAIN_RUN": run,
         "SYN_TRAIN_LIMIT_PER_SOURCE": str(args.limit_per_source),
-        "SYN_TRAIN_EPOCHS": str(args.epochs),
+        "SYN_TRAIN_EPOCHS": str(8 if args.epochs is None else args.epochs),
         "HF_HOME": "/runpod-volume/huggingface-cache" if args.volume_id else "/workspace/hf",
         "HF_HUB_ENABLE_HF_TRANSFER": "1",
         "PYTHONUNBUFFERED": "1",
     }
+    if args.task == "pointer":
+        env["SYN_TRAIN_POINTER_EPOCHS"] = str(2 if args.epochs is None else args.epochs)
     if args.revision:
         env["SYN_REVISION"] = args.revision
     if args.sources:
@@ -120,6 +122,16 @@ def request(method: str, path: str, **kwargs) -> httpx.Response:
     return response
 
 
+def store_prefix(task: str, hf_repo: str | None, volume_id: str | None) -> str:
+    """Where a finished run can be found. Pointer runs are under pointers/, head runs under heads/."""
+    if hf_repo:
+        folder = "pointers" if task == "pointer" else "heads"
+        return f"hf://{hf_repo}/{folder}/"
+    if volume_id:
+        return "the network volume"
+    return "nowhere durable (no --hf-repo)"
+
+
 def wait(pod_id: str, where: str) -> None:
     while True:
         response = httpx.get(
@@ -164,7 +176,12 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--run", help="Run name; defaults to a timestamp")
     parser.add_argument("--sources", help="Comma-separated data/ directories to train on")
     parser.add_argument("--suites", help="Comma-separated System One suite directories to import")
-    parser.add_argument("--epochs", type=int, default=8)
+    parser.add_argument(
+        "--epochs",
+        type=int,
+        default=None,
+        help="Training epochs. Default 8 for the head task and 2 for the pointer task",
+    )
     parser.add_argument("--limit-per-source", type=int, default=2000)
     parser.add_argument("--keep", action="store_true", help="Leave the pod running afterwards")
     parser.add_argument("--wait", action="store_true")
@@ -186,11 +203,7 @@ def main(argv: list[str] | None = None) -> None:
     pod_id = pod.get("id")
     print(f"started pod {pod_id} ({body['name']}) on {args.gpu}")
     print("logs: RunPod console -> Pods -> this pod -> Logs")
-    where = (
-        f"hf://{args.hf_repo}/heads/"
-        if args.hf_repo
-        else ("the network volume" if args.volume_id else "nowhere durable (no --hf-repo)")
-    )
+    where = store_prefix(args.task, args.hf_repo, args.volume_id)
     if args.wait and pod_id:
         wait(pod_id, where)
 

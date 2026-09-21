@@ -11,7 +11,7 @@ from typesafe_sdk import AsyncTypeSafeClient, Choice, Noul, RetryPolicy, Score
 from syn.api import create_app
 from syn.backends import BackendResult
 from syn.config import Settings
-from syn.systemone import SystemOneRequest, to_request
+from syn.systemone import SystemOneRequest, render, to_request
 
 # Option descriptions the fake backend recognizes, with the probability mass it gives each.
 WEIGHTS = {
@@ -111,7 +111,10 @@ def test_descriptions_and_structured_content_are_rendered():
     assert [o.text for o in noul.options] == ["Yes: Refunds", "No"]
     assert noul.question == "Is this true?"
     choice = to_request("s", request.questions["b"])
-    assert [o.text for o in choice.options] == ['billing: {"team": "finance"}', "tech"]
+    assert [o.text for o in choice.options] == ["billing: team: finance", "tech"]
+    assert render({"subject": "Duplicate charge", "tags": ["a", "b"]}) == (
+        "subject: Duplicate charge\ntags:\n  - a\n  - b"
+    )
 
 
 def test_systemone_answers_every_question(client):

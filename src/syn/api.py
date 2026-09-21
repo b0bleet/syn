@@ -158,13 +158,14 @@ def create_app(settings: Settings | None = None, scorer: Scorer | None = None) -
         if getattr(app.state, "scorer", None) is None:
             from transformers import AutoTokenizer
 
+            from syn.artifacts import pretrained_call
+
             # Config first: pins the exact commit and rejects unsupported models before any
             # weights download.
             config = resolve_config(settings)
             commit = revision_commit(config)
-            tokenizer = AutoTokenizer.from_pretrained(
-                settings.model, revision=settings.revision, trust_remote_code=False
-            )
+            model, extra = pretrained_call(settings.model, settings.revision)
+            tokenizer = AutoTokenizer.from_pretrained(model, trust_remote_code=False, **extra)
             builder = PromptBuilder(tokenizer, settings.max_prompt_tokens, settings.prompt_format)
             if settings.backend == "local":
                 backend = LocalBackend(settings, config)

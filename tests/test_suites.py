@@ -74,9 +74,10 @@ def test_convert_record_renders_like_the_service_and_tags_rows():
     rows, skipped = convert_record(SCORE, "fallback")
     by_question = {r["request"]["question"][:9]: r for r in rows}
     assert len(rows) == 2
-    score = EvalExample.model_validate(by_question['{"questio'])
+    score = EvalExample.model_validate(by_question["question:"])
     assert score.ordinal and score.expected_option_id == "1" and score.source == "reviews"
-    assert score.request.context == '{"review": "none of it amounts to much"}'
+    assert score.request.context == "review: none of it amounts to much"
+    assert score.request.question == "question: Sentiment?\nfocus: Pick one."
     assert [o.id for o in score.request.options] == ["0", "1", "2", "3"]
     topic = EvalExample.model_validate(by_question["Topic?"])
     assert topic.expected_option_id == "film" and not topic.ordinal

@@ -8,6 +8,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="SYN_", allow_inf_nan=False)
     backend: Literal["local", "sglang"] = "local"
+    # A Hub model id, a local directory, or hf://<user>/<repo>/<directory> (a pointer backbone).
     model: str = "Qwen/Qwen3-0.6B"
     revision: str = "main"
     device: Literal["auto", "cpu", "mps", "cuda"] = "auto"

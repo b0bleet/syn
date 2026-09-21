@@ -136,9 +136,10 @@ def resolve_config(settings: Settings):
     """Fetch only the model config, so the checkpoint can be checked and pinned before weights load."""
     from transformers import AutoConfig
 
-    return AutoConfig.from_pretrained(
-        settings.model, revision=settings.revision, trust_remote_code=False
-    )
+    from .artifacts import pretrained_call
+
+    model, extra = pretrained_call(settings.model, settings.revision)
+    return AutoConfig.from_pretrained(model, trust_remote_code=False, **extra)
 
 
 def revision_commit(config) -> str | None:
@@ -150,6 +151,8 @@ class LocalBackend:
     def __init__(self, settings: Settings, config=None):
         import torch
         from transformers import AutoModelForCausalLM
+
+        from .artifacts import pretrained_call
 
         config = config if config is not None else resolve_config(settings)
         if config.model_type != "qwen3":
@@ -176,14 +179,15 @@ class LocalBackend:
         attn = None
         if settings.readout in ("pmi", "pointer"):
             attn = "sdpa" if device == "cuda" else "eager"
+        model, extra = pretrained_call(settings.model, settings.revision)
         self.model = (
             AutoModelForCausalLM.from_pretrained(
-                settings.model,
-                revision=settings.revision,
+                model,
                 config=config,
                 dtype=self.dtype,
                 trust_remote_code=False,
                 attn_implementation=attn,
+                **extra,
             )
             .to(device)
             .eval()

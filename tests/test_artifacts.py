@@ -45,6 +45,28 @@ def test_resolve_checkpoint_fetches_the_sidecar_too(tmp_path, monkeypatch):
         artifacts.download_file("hf://u/r")
 
 
+def test_resolve_pretrained_downloads_a_backbone_directory(tmp_path, monkeypatch):
+    from syn.artifacts import pretrained_call, resolve_pretrained
+
+    assert resolve_pretrained("Qwen/Qwen3-0.6B", "main") == ("Qwen/Qwen3-0.6B", "main")
+
+    def fake_snapshot(repo_id, allow_patterns, revision, token):
+        folder = tmp_path / "pointers" / "run" / "backbone"
+        folder.mkdir(parents=True)
+        (folder / "config.json").write_text("{}")
+        assert repo_id == "u/r"
+        assert revision == "abc"
+        assert token == "tok"
+        return str(tmp_path)
+
+    monkeypatch.setattr("huggingface_hub.snapshot_download", fake_snapshot)
+    monkeypatch.setenv("HF_TOKEN", "tok")
+    model, extra = pretrained_call("hf://u/r/pointers/run/backbone@abc", "main")
+    assert model == str(tmp_path / "pointers" / "run" / "backbone")
+    assert extra == {}
+    assert (Path(model) / "config.json").is_file()
+
+
 def test_pull_lists_fetched_files_and_tolerates_a_missing_repo(tmp_path, monkeypatch):
     from huggingface_hub.errors import RepositoryNotFoundError
 
