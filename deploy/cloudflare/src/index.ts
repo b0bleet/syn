@@ -57,6 +57,8 @@ interface Charge {
 }
 
 const PENDING = new Set(["IN_QUEUE", "IN_PROGRESS"]);
+// What callers see when the GPU side fails; the specifics go to the Worker's logs.
+const UNAVAILABLE = "The scoring service is temporarily unavailable. Please try again shortly.";
 const CORS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Expose-Headers":
@@ -223,7 +225,8 @@ async function runJob(env: Env, input: unknown): Promise<unknown> {
     if (Date.now() + poll >= deadline) {
       // Best effort, so an abandoned job does not keep a GPU busy.
       await fetch(`${base}/cancel/${job.id}`, { method: "POST", headers }).catch(() => undefined);
-      throw new JobError(`GPU worker did not finish within ${timeout / 1000}s`, 504);
+      console.error("RunPod job timed out", job.id, job.status);
+      throw new JobError("The GPU took too long to answer. Please try again.", 504);
     }
     await new Promise((resolve) => setTimeout(resolve, poll));
     job = await runpod(fetch(`${base}/status/${job.id}`, { headers }));
@@ -231,7 +234,7 @@ async function runJob(env: Env, input: unknown): Promise<unknown> {
   if (job.status !== "COMPLETED") {
     // The error can carry a worker traceback; log it, do not return it to callers.
     console.error("RunPod job failed", job.id, job.status, job.error);
-    throw new JobError(`Scoring job ${job.status ?? "returned no status"}`, 502);
+    throw new JobError(UNAVAILABLE, 502);
   }
   return job.output;
 }
@@ -241,13 +244,19 @@ async function runpod(pending: Promise<Response>): Promise<Job> {
   try {
     response = await pending;
   } catch (error) {
-    throw new JobError(`RunPod unreachable: ${error}`, 502);
+    console.error("RunPod unreachable", error);
+    throw new JobError(UNAVAILABLE, 502);
   }
-  if (!response.ok) throw new JobError(`RunPod answered ${response.status}`, 502);
+  if (!response.ok) {
+    // 401 or 403 here means the Worker's RUNPOD_API_KEY secret is missing or wrong.
+    console.error("RunPod answered", response.status);
+    throw new JobError(UNAVAILABLE, 502);
+  }
   try {
     return (await response.json()) as Job;
   } catch {
-    throw new JobError("RunPod returned invalid JSON", 502);
+    console.error("RunPod returned invalid JSON");
+    throw new JobError(UNAVAILABLE, 502);
   }
 }
 

@@ -274,22 +274,27 @@ describe("proxy", () => {
   });
 
   it("cancels the job and answers 504 at the deadline", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
     const calls = runpod({ id: "j9", status: "IN_QUEUE" }, {});
     const response = await call(makeEnv({ JOB_TIMEOUT_SECONDS: "0" }), "/a,b/hi");
     expect(response.status).toBe(504);
     expect(calls.at(-1)).toMatchObject({ url: `${RUNPOD}/cancel/j9` });
   });
 
-  it("answers 502 without leaking worker errors", async () => {
-    vi.spyOn(console, "error").mockImplementation(() => undefined);
+  it("answers 502 with a plain message and keeps the internals in the logs", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const env = makeEnv({ DAILY_LIMIT: "100" });
     runpod({ id: "j", status: "FAILED", error: "Traceback: /secret/path.py" });
     const failed = await call(env, "/a,b/hi");
     expect(failed.status).toBe(502);
     expect(await failed.text()).not.toContain("secret");
 
+    // A missing or wrong RunPod key: callers see no internals, the log names the cause.
     runpod(new Response("nope", { status: 401 }));
-    expect(await (await call(env, "/a,b/hi")).json()).toEqual({ detail: "RunPod answered 401" });
+    const unauthorized = await detail(await call(env, "/a,b/hi"));
+    expect(unauthorized).toContain("temporarily unavailable");
+    expect(unauthorized).not.toMatch(/RunPod|401/);
+    expect(logged).toHaveBeenCalledWith("RunPod answered", 401);
 
     runpod({ id: "j", status: "COMPLETED", output: { unexpected: true } });
     expect((await call(env, "/a,b/hi")).status).toBe(502);
