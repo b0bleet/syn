@@ -21,6 +21,27 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--shuffle-options", action="store_true")
     evaluate.add_argument("--seed", type=int, default=42)
 
+    bench = sub.add_parser(
+        "bench",
+        help="Send the same labeled rows to System One endpoints such as Jev; resumes",
+    )
+    bench.add_argument("datasets", type=Path, nargs="+")
+    bench.add_argument("--out", type=Path, required=True)
+    bench.add_argument(
+        "--target",
+        action="append",
+        required=True,
+        help="NAME[@MODEL][=URL], repeatable; the first is the reference. "
+        "jev needs TYPESAFE_API_KEY; other targets send <NAME>_API_KEY when set",
+    )
+    bench.add_argument(
+        "--concurrency",
+        type=int,
+        default=1,
+        help="Requests in flight per target; above 1, latency includes queueing at the target",
+    )
+    bench.add_argument("--limit", type=int, default=0, help="Only the first N rows per dataset")
+
     calibrate = sub.add_parser("calibrate", help="Fit temperature on calibration predictions")
     calibrate.add_argument("predictions", type=Path)
     calibrate.add_argument("--output", type=Path, required=True)
@@ -88,7 +109,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None):
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
     if args.command == "serve":
         import uvicorn
 
@@ -97,6 +119,18 @@ def main(argv: list[str] | None = None):
         from .evaluation import evaluate
 
         result = evaluate(args.dataset, args.output, args.url, args.shuffle_options, args.seed)
+        print(json.dumps(result, indent=2))
+    elif args.command == "bench":
+        from .bench import TargetError, bench, parse_target
+
+        try:
+            targets = [parse_target(spec) for spec in args.target]
+        except ValueError as exc:
+            parser.error(str(exc))
+        try:
+            result = bench(args.datasets, args.out, targets, args.concurrency, args.limit)
+        except TargetError as exc:
+            raise SystemExit(f"syn bench: {exc}") from exc
         print(json.dumps(result, indent=2))
     elif args.command == "calibrate":
         from .evaluation import fit_temperature

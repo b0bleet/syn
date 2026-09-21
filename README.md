@@ -82,6 +82,20 @@ SYN_READOUT=head SYN_HEAD_PATH=runs/head.safetensors uv run --extra local syn se
 
 `eval-head` reports a shuffled-context control alongside real accuracy; if the control doesn't collapse toward chance, the head is reading option priors, not the state.
 
+## Benchmark against Jev
+
+`syn bench` sends every labeled row to each target as the same System One request, one choice question with the row's options, and scores all targets the same way: accuracy with a 95% interval, log loss, Brier, ECE, latency, and a paired bootstrap of each target against the first. Any server that speaks `POST /v1/systemone` can be a target, this one included.
+
+```sh
+export TYPESAFE_API_KEY=...   # from console.typesafe.ai/keys
+uv run syn bench data/eval/agnews-250.jsonl data/eval/banking77-250.jsonl data/spam-eval.jsonl \
+  --out runs/bench --target jev --target syn=http://127.0.0.1:8765
+```
+
+A target is `NAME[@MODEL][=URL]`. `jev` means `https://api.typesafe.ai` with `jev-latest`; pin a version with `jev@<version>`, since the version that answered is recorded per row. Other targets send `<NAME>_API_KEY` as a bearer token when it's set. Rows land in `runs/bench/<dataset>/<target>.jsonl`, with `summary.json` and `summary.md` beside them. Re-running resumes: scored rows are kept, failed rows are retried, and a target added later only scores its own rows.
+
+Requests go one at a time by default, so latency is one round trip from your machine, network included. `--concurrency N` is faster but adds queueing at the target to the latency. Public datasets may be in any model's training data, so confirm a result on your own labeled rows before relying on it.
+
 ## SGLang backend
 
 ```sh

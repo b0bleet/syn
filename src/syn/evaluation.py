@@ -52,6 +52,42 @@ def bootstrap_ci(values: list[float], samples: int = 1000, seed: int = 0) -> lis
     return [means[int(0.025 * samples)], means[min(int(0.975 * samples), samples - 1)]]
 
 
+def expected_calibration_error(
+    confidence: list[float], correct: list[int], bins: int = 10
+) -> float:
+    """Mean gap between stated confidence and observed accuracy, over equal-width bins."""
+    n = len(confidence)
+    ece = 0.0
+    for bucket in range(bins):
+        indices = [i for i, p in enumerate(confidence) if min(int(p * bins), bins - 1) == bucket]
+        if indices:
+            ece += abs(sum(confidence[i] - correct[i] for i in indices)) / n
+    return ece
+
+
+def paired_difference(ca: list[int], cb: list[int], samples: int = 1000, seed: int = 0) -> dict:
+    """Accuracy difference b minus a on the same examples, with a paired bootstrap interval.
+
+    Resampling examples jointly is far tighter than comparing two independent intervals.
+    """
+    n = len(ca)
+    rng = random.Random(seed)
+    diffs = sorted(
+        sum(cb[j] - ca[j] for j in rng.choices(range(n), k=n)) / n for _ in range(samples)
+    )
+    return {
+        "difference_b_minus_a": (sum(cb) - sum(ca)) / n,
+        "difference_ci95": [
+            diffs[int(0.025 * samples)],
+            diffs[min(int(0.975 * samples), samples - 1)],
+        ],
+        "both_correct": sum(x and y for x, y in zip(ca, cb)),
+        "only_a_correct": sum(x and not y for x, y in zip(ca, cb)),
+        "only_b_correct": sum(y and not x for x, y in zip(ca, cb)),
+        "neither_correct": sum(not x and not y for x, y in zip(ca, cb)),
+    }
+
+
 def _accepted(response: ScoreResponse, probs: list[float], best: int) -> bool:
     chance = 1.0 / len(probs)
     confidence = (probs[best] - chance) / (1.0 - chance)
@@ -102,11 +138,7 @@ def metrics(rows: list[dict], temperature: float | None = None, bootstrap: int =
             flips.append(permuted.best_option_id != response.best_option_id)
             permuted_correct.append(permuted.best_option_id == row["expected_option_id"])
     n = len(scored)
-    ece = 0.0
-    for bucket in range(10):
-        indices = [i for i, p in enumerate(confidence) if min(int(p * 10), 9) == bucket]
-        if indices:
-            ece += abs(sum(confidence[i] - correct[i] for i in indices)) / n
+    ece = expected_calibration_error(confidence, correct)
     accepted_count = sum(accepted)
     profile = dict(zip(PROFILE_FIELDS, next(iter(profiles)))) if len(profiles) == 1 else None
     return {
@@ -251,10 +283,6 @@ def compare(path_a: Path, path_b: Path, samples: int = 1000, seed: int = 0) -> d
     ca = [_correct(a[i]) for i in common]
     cb = [_correct(b[i]) for i in common]
     n = len(common)
-    rng = random.Random(seed)
-    diffs = sorted(
-        sum(cb[j] - ca[j] for j in rng.choices(range(n), k=n)) / n for _ in range(samples)
-    )
     profile = lambda rows: dict(
         zip(PROFILE_FIELDS, (rows[common[0]]["response"].get(f) for f in PROFILE_FIELDS))
     )
@@ -262,15 +290,7 @@ def compare(path_a: Path, path_b: Path, samples: int = 1000, seed: int = 0) -> d
         "examples": n,
         "accuracy_a": sum(ca) / n,
         "accuracy_b": sum(cb) / n,
-        "difference_b_minus_a": (sum(cb) - sum(ca)) / n,
-        "difference_ci95": [
-            diffs[int(0.025 * samples)],
-            diffs[min(int(0.975 * samples), samples - 1)],
-        ],
-        "both_correct": sum(x and y for x, y in zip(ca, cb)),
-        "only_a_correct": sum(x and not y for x, y in zip(ca, cb)),
-        "only_b_correct": sum(y and not x for x, y in zip(ca, cb)),
-        "neither_correct": sum(not x and not y for x, y in zip(ca, cb)),
+        **paired_difference(ca, cb, samples, seed),
         "profile_a": profile(a),
         "profile_b": profile(b),
         "bootstrap_samples": samples,
