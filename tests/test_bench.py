@@ -88,7 +88,7 @@ def test_parse_target_presets_and_urls():
         "m1",
         "MY_PROXY_API_KEY",
     )
-    for bad in ("kev", "Jev", "=http://x", "a b=http://x"):
+    for bad in ("acme", "Jev", "=http://x", "a b=http://x"):
         with pytest.raises(ValueError):
             parse_target(bad)
 
@@ -256,7 +256,7 @@ def test_cli_bench(monkeypatch, capsys):
     assert json.loads(capsys.readouterr().out) == {"ok": 1}
 
     with pytest.raises(SystemExit) as exited:
-        cli.main([*argv, "--target", "kev"])
+        cli.main([*argv, "--target", "acme"])
     assert exited.value.code == 2
 
     def refused(*args):

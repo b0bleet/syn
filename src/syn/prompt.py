@@ -10,6 +10,8 @@ PROMPT_VERSIONS = {"json": "qwen-options-v1", "text": "qwen-options-text-v1"}
 CLOZE_VERSION = "qwen-cloze-pmi-v1"
 # The head readout: cloze prefix without listing for the context, standalone option spans.
 HEAD_VERSION = "qwen-head-v1"
+# The pointer readout: the same prefix, delimited isolated option spans, one decide token.
+POINTER_VERSION = "qwen-pointer-v1"
 PRIOR_CONTEXT = "(none)"
 LABELS = string.ascii_uppercase
 CLOZE_RULES = (
@@ -18,8 +20,8 @@ CLOZE_RULES = (
     "Answer with the exact text of one option and nothing else."
 )
 # Caller text shaped like a Qwen control token, `<|name|>`, is rewritten to `<¦name¦>` before it
-# reaches the tokenizer (the approach in jaredpalmer/kev). The text stays readable and can never
-# close the user turn or open a new one.
+# reaches the tokenizer. The text stays readable and can never close the user turn or open a new
+# one.
 CONTROL_RE = re.compile(r"<\|([A-Za-z0-9_]+)\|>")
 RULES = (
     "Select the single best option for the question using the context and criteria. "
@@ -80,6 +82,10 @@ class PromptBuilder:
 
     def _encode(self, text: str) -> list[int]:
         return self.tokenizer.encode(text, add_special_tokens=False)
+
+    def option_ids(self, text: str) -> list[int]:
+        """An option's tokens, exactly as `prepare_cloze` encodes every option."""
+        return self._encode(text)
 
     def _probe(self) -> None:
         """Learn the template's fixed tail once, so a request needs one tokenizer pass, not one per label.

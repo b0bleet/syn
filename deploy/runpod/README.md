@@ -49,6 +49,40 @@ The public API is the Cloudflare Worker in `deploy/cloudflare/`, which sends
 `{"input": {"http": {"method", "path", "headers", "body"}}}`; the handler replays that request
 against the same FastAPI app `syn serve` runs and returns `{"status", "headers", "body"}`.
 
+## Train the general head on a pod
+
+`scripts/runpod_train.py` starts a GPU pod that clones this repository, caches features for
+every dataset under `data/` (rebuilt from Hugging Face on the pod), runs `syn transfer`, and
+stops itself. Nothing runs on your machine.
+
+```sh
+export RUNPOD_API_KEY=...            # console -> Settings -> API Keys
+uv run python scripts/runpod_train.py --model Qwen/Qwen3-8B --volume-id <network-volume> --wait
+```
+
+- **Network volume** (Storage -> New Network Volume, same data center as the endpoint,
+  50 GB is plenty): features land in `features/<model>/`, checkpoints and `RESULT.md` in
+  `heads/<model>/<run>/`, logs in `logs/`. Attach the same volume to the serverless endpoint
+  and set `SYN_READOUT=head` and `SYN_HEAD_PATH=/runpod-volume/heads/<model>/<run>/all-sources.safetensors`
+  to serve the trained head with its fitted temperature. Without a volume, results stay on
+  the pod's disk under `/workspace` until the pod is stopped; add `--keep` and copy them out.
+- `--suites DIR,...` imports extra System One labelled-request suites (see
+  `syn import-systemone`) from the volume before caching features; `--sources` restricts the
+  datasets; `--upload-repo` pushes the run to a Hugging Face repo (needs `HF_TOKEN`).
+- `--ref` picks the commit the pod runs; it defaults to your current HEAD, so push first.
+- The `RESULT.md` table has one row per source: in-domain accuracy from the all-sources head,
+  transfer accuracy from the head trained without that source, and the shuffled-context
+  control. The transfer column is the one that says whether the head is general.
+- Memory: cached features are about a megabyte per row at 8B, held in RAM while the heads
+  train; `--limit-per-source` (default 2000) bounds that. `--gpu` defaults to an L40S.
+- The pod runs `deploy/runpod/train_job.py`, which also works on any GPU box with the
+  `[local,hub]` extras. On failure the pod stays up so its logs can be read; stop it with
+  `--stop <pod-id>`.
+- `syn train-pointer` (adapters on the backbone plus a pointer head) is not part of the job
+  yet: run it on a pod started with `--keep`, or on any GPU box, against the rows in `data/`.
+  Serve its output from the volume with `SYN_MODEL=/runpod-volume/<run>/backbone`,
+  `SYN_READOUT=pointer`, and `SYN_POINTER_PATH=/runpod-volume/<run>/pointer.safetensors`.
+
 ## Notes
 
 - GitHub import: set the Dockerfile path to `deploy/runpod/Dockerfile` and the build

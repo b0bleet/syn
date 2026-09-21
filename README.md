@@ -47,6 +47,7 @@ curl http://127.0.0.1:8765/ -H 'Content-Type: application/json' \
 - **letters** (default): builds N cyclic option orderings so every option occupies every position once, reads label log-probs, averages, softmaxes. `ordering_agreement` exposes ordering disagreement, the signal that catches confidently wrong answers.
 - **pmi**: scores each option's text likelihood given the context, prior-corrected, in one masked forward. Order-invariant by construction. Helps with short label words; weak on long descriptive options.
 - **head**: a trained cross-attention head over frozen backbone features (`syn train-head`); local backend only, needs `SYN_HEAD_PATH`.
+- **pointer**: a backbone adapted by `syn train-pointer` (low-rank adapters, merged into the weights) read by a trained pointer head over delimited, isolated option spans. Order-invariant by construction; local backend only, needs `SYN_POINTER_PATH`.
 
 The service abstains (`selected_option_id: null`, `abstain_reasons`) below the `SYN_ABSTAIN_THRESHOLD`, `SYN_MIN_CONFIDENCE`, and `SYN_MIN_ORDERING_AGREEMENT` gates. Probabilities are option preferences, not calibrated success rates.
 
@@ -70,17 +71,38 @@ uv run syn evaluate data/synthetic/test.jsonl \
 uv run syn compare runs/a.jsonl runs/b.jsonl     # paired bootstrap diff
 ```
 
-Trained head (frozen features cached once, ~1M-param head trains in seconds):
+Trained head (frozen features cached once; the ~1M-param head trains in seconds, on the GPU when there is one):
 
 ```sh
-uv run --extra local syn features data/train.jsonl --out runs/feats/train.npz  # + validation, test
-uv run --extra local syn train-head runs/feats/train.npz \
-  --validation runs/feats/validation.npz --out runs/head.safetensors
-uv run --extra local syn eval-head runs/head.safetensors runs/feats/test.npz
+uv run --extra local syn features data/agnews/train.jsonl --out runs/feats/agnews-train.npz  # + validation, calibration, test
+uv run --extra local syn train-head runs/feats/agnews-train.npz runs/feats/banking77-train.npz \
+  --validation runs/feats/agnews-validation.npz runs/feats/banking77-validation.npz \
+  --out runs/head.safetensors --p-none 0.1 --p-none-distract 0.12 --p-distract 0.15
+uv run --extra local syn eval-head runs/head.safetensors runs/feats/agnews-test.npz
 SYN_READOUT=head SYN_HEAD_PATH=runs/head.safetensors uv run --extra local syn serve
 ```
 
-`eval-head` reports a shuffled-context control alongside real accuracy; if the control doesn't collapse toward chance, the head is reading option priors, not the state.
+Several feature files train one head. Every row carries a source tag (`--source`, default the dataset's directory name), so `eval-head` reports per source as well. The temperature is fitted on the `--calibration` rows (or validation) and stored in the checkpoint; `serve` applies it unless `SYN_TEMPERATURE` is set. `--p-none`, `--p-none-distract`, and `--p-distract` add "None of the above" wordings and unrelated distractors to training rows, so the head learns when nothing offered fits and that an extra irrelevant option changes nothing. Rows marked `"ordinal": true` (score questions, options are ordered levels) get a ranked-probability loss on top (`--ordinal-weight`).
+
+`eval-head` reports a shuffled-context control alongside real accuracy; if the control doesn't collapse toward chance, the head is reading option priors, not the state. Whether a head is general is the transfer number, not in-domain accuracy:
+
+```sh
+uv run --extra local syn transfer --train runs/feats/*-train.npz --validation runs/feats/*-validation.npz \
+  --test runs/feats/*-test.npz --out runs/transfer
+```
+
+trains one head on all sources and one without each source, then tests every held-out head on the source it never saw; `transfer.json` lists in-domain, transfer, and control accuracy per source. `scripts/runpod_train.py` runs the whole pipeline on a RunPod GPU (see `deploy/runpod/README.md`).
+
+System One suites, labelled `/v1/systemone` requests (a `state`, `questions` with a `label` each), import as rows with `syn import-systemone <dir> --out data/<name>`; score questions come out ordinal, and rows render exactly as the service renders them.
+
+Adapted backbone (GPU, `--extra train`): `syn train-pointer` adds low-rank adapters to the backbone and trains a pointer head over delimited, isolated option spans, with the same augmentation, the ordinal loss, and an optional anchor to the base model's zero-shot distribution (`--anchor`, a `syn evaluate` output on the training rows). The adapters are merged into the weights on save, so serving needs only the `local` extra:
+
+```sh
+uv run --extra local --extra train syn train-pointer data/agnews/train.jsonl data/banking77/train.jsonl \
+  --validation data/agnews/validation.jsonl data/banking77/validation.jsonl --out runs/pointer
+SYN_MODEL=runs/pointer/backbone SYN_READOUT=pointer SYN_POINTER_PATH=runs/pointer/pointer.safetensors \
+  uv run --extra local syn serve
+```
 
 ## Benchmark against Jev
 
@@ -92,7 +114,7 @@ uv run syn bench data/eval/agnews-250.jsonl data/eval/banking77-250.jsonl data/s
   --out runs/bench --target jev --target syn=http://127.0.0.1:8765
 ```
 
-A target is `NAME[@MODEL][=URL]`. `jev` means `https://api.typesafe.ai` with `jev-latest`; pin a version with `jev@<version>`, since the version that answered is recorded per row. Other targets send `<NAME>_API_KEY` as a bearer token when it's set. Rows land in `runs/bench/<dataset>/<target>.jsonl`, with `summary.json` and `summary.md` beside them. Re-running resumes: scored rows are kept, failed rows are retried, and a target added later only scores its own rows.
+A target is `NAME[@MODEL][=URL]`. `jev` means `https://api.typesafe.ai` with `jev-latest`; pin a version with `jev@<version>`, since the version that answered is recorded per row. Other targets send `<NAME>_API_KEY` as a bearer token when it's set. Rows marked `"ordinal": true` go as score questions with their options as the levels, and `level_mae` reports how far each target's expected level sat from the true one. Rows land in `runs/bench/<dataset>/<target>.jsonl`, with `summary.json` and `summary.md` beside them. Re-running resumes: scored rows are kept, failed rows are retried, and a target added later only scores its own rows.
 
 Requests go one at a time by default, so latency is one round trip from your machine, network included. `--concurrency N` is faster but adds queueing at the target to the latency. Public datasets may be in any model's training data, so confirm a result on your own labeled rows before relying on it.
 
@@ -139,9 +161,10 @@ CI (`.github/workflows/ci.yml`) tests every push and pull request. On `main` it 
 | `SYN_BACKEND` | `local` | `local` or `sglang` |
 | `SYN_MODEL` | `Qwen/Qwen3-0.6B` | Qwen3 causal checkpoint |
 | `SYN_DEVICE` / `SYN_DTYPE` | `auto` | `cpu`/`mps`/`cuda`; `float32`/`bfloat16`/`float16` |
-| `SYN_READOUT` | `letters` | `letters`, `pmi`, `head` |
+| `SYN_READOUT` | `letters` | `letters`, `pmi`, `head`, `pointer` |
 | `SYN_PMI_LIST_OPTIONS` | `false` | pmi: name options in the prefix; helps some items, leaks order |
-| `SYN_HEAD_PATH` | unset | head: `.safetensors` checkpoint from `syn train-head` |
+| `SYN_HEAD_PATH` | unset | head: `.safetensors` checkpoint from `syn train-head` (its fitted temperature applies) |
+| `SYN_POINTER_PATH` | unset | pointer: `pointer.safetensors` from `syn train-pointer`; set `SYN_MODEL` to that run's `backbone/` |
 | `SYN_PROMPT_FORMAT` | `json` | `json` or `text` |
 | `SYN_ORDERINGS` | `0` | Cyclic orderings per request; `0` = one per option |
 | `SYN_TEMPERATURE` | `1` | Option-distribution temperature |
@@ -149,7 +172,8 @@ CI (`.github/workflows/ci.yml`) tests every push and pull request. On `main` it 
 | `SYN_API_KEY` | unset | Bearer token on every classification route; `/health` stays open |
 | `SYN_LOG_PATH` | unset | Optional JSONL decision log |
 | `SYN_SGLANG_URL` | `http://127.0.0.1:30000` | SGLang server URL |
-| `SYN_SGLANG_CHECK_MODEL` | `true` | Refuse to start if SGLang serves another model || `SYN_MAX_PROMPT_TOKENS` | `8192` | Reject longer prompts; never truncate |
+| `SYN_SGLANG_CHECK_MODEL` | `true` | Refuse to start if SGLang serves another model |
+| `SYN_MAX_PROMPT_TOKENS` | `8192` | Reject longer prompts; never truncate |
 | `SYN_LOCAL_BATCH_TOKENS` | `16384` | Token budget per batched local forward |
 
 ## Checks

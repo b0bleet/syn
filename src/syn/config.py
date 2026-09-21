@@ -16,11 +16,14 @@ class Settings(BaseSettings):
     prompt_format: Literal["json", "text"] = "json"
     # letters: read the option letter's next-token log-prob, averaged over cyclic orderings.
     # pmi: score each option's own text likelihood under a block-causal mask (all options in one
-    # forward, kev-style), minus the same likelihood with the context removed. Local backend only.
+    # forward), minus the same likelihood with the context removed. Local backend only.
     # head: a trained AttentionHead over frozen backbone features (see `syn train-head`).
     # Local backend only; requires head_path.
-    readout: Literal["letters", "pmi", "head"] = "letters"
+    # pointer: a backbone adapted by `syn train-pointer` (point `model` at its backbone/
+    # directory) read by its pointer head. Local backend only; requires pointer_path.
+    readout: Literal["letters", "pmi", "head", "pointer"] = "letters"
     head_path: Path | None = None
+    pointer_path: Path | None = None
     # pmi only. False: each option is scored from the context, the question, and its own text, so
     # the result is exactly invariant to option order by construction. True: the options are also
     # named in the prefix so the model knows the choice set, but that listing has an order and it
@@ -51,4 +54,6 @@ class Settings(BaseSettings):
     def head_needs_a_checkpoint(self):
         if self.readout == "head" and self.head_path is None:
             raise ValueError("SYN_HEAD_PATH is required when SYN_READOUT=head")
+        if self.readout == "pointer" and self.pointer_path is None:
+            raise ValueError("SYN_POINTER_PATH is required when SYN_READOUT=pointer")
         return self

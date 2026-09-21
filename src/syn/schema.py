@@ -46,8 +46,8 @@ class ScoreResponse(StrictModel):
     revision_commit: str | None
     backend: str
     prompt_version: str
-    readout: Literal["letters", "pmi", "head"] = "letters"
-    # sha256 of the head checkpoint when readout=head; part of the calibration profile.
+    readout: Literal["letters", "pmi", "head", "pointer"] = "letters"
+    # sha256 of the head checkpoint (readout=head or pointer); part of the calibration profile.
     head_sha256: str | None = None
     scores: list[OptionScore]
     best_option_id: str
@@ -121,6 +121,12 @@ class ClassifyResponse(StrictModel):
 class EvalExample(StrictModel):
     request: ScoreRequest
     expected_option_id: str
+    # The options are ordered levels, lowest first, as in a score question. Training then adds an
+    # ordinal loss, and a benchmark sends the row as a score question rather than a choice.
+    ordinal: bool = False
+    # Where the row came from (a dataset or suite name). Metrics are reported per source, and a
+    # transfer run holds one source out entirely.
+    source: Annotated[str, Field(max_length=128)] | None = None
 
     @model_validator(mode="after")
     def valid_answer(self):

@@ -1,8 +1,8 @@
 """Convert a public Hugging Face classification dataset into decision rows.
 
 A classification row is already a decision: the text is the state, the classes are the options,
-and the existing label is the answer. The only real work is choosing which options to show. This
-follows kev's approach of reshaping public datasets rather than waiting for private labels.
+and the existing label is the answer. The only real work is choosing which options to show.
+Reshaping public datasets this way gives training rows without waiting for private labels.
 
     syn import-hf fancyzhx/ag_news --out data/agnews
 

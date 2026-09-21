@@ -27,7 +27,7 @@ import asyncio
 import runpod
 from transformers import AutoTokenizer
 
-from syn.api import create_app, load_head
+from syn.api import create_app, load_head, load_pointer
 from syn.backends import LocalBackend, resolve_config, revision_commit
 from syn.config import Settings
 from syn.http_job import serve
@@ -44,10 +44,13 @@ tokenizer = AutoTokenizer.from_pretrained(
 )
 builder = PromptBuilder(tokenizer, settings.max_prompt_tokens, settings.prompt_format)
 backend = LocalBackend(settings, config)
-head, head_sha = (None, None)
+head, head_sha, head_temperature, pointer = None, None, None, None
 if settings.readout == "head":
-    head, head_sha = load_head(settings, config, commit)
-scorer = Scorer(settings, builder, backend, commit, head, head_sha)
+    head, head_sha, head_config = load_head(settings, config, commit)
+    head_temperature = head_config.get("temperature")
+elif settings.readout == "pointer":
+    pointer = load_pointer(settings, config, tokenizer)
+scorer = Scorer(settings, builder, backend, commit, head, head_sha, head_temperature, pointer)
 app = create_app(settings, scorer)
 
 

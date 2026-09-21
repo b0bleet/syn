@@ -2,9 +2,10 @@
 
     syn bench data/eval/agnews-250.jsonl --out runs/bench --target jev --target syn=http://127.0.0.1:8765
 
-Every labeled row becomes one System One request holding a single choice question: the row's
-context is the state, its question the instructions, its options the criteria. Every target
-receives the same request body, so differences come from the models, not the prompts.
+Every labeled row becomes one System One request holding a single question: the row's context
+is the state, its question the instructions, its options the criteria. A row marked ordinal
+goes as a score question with its options as the levels; any other row goes as a choice. Every
+target receives the same request body, so differences come from the models, not the prompts.
 
 A target is `NAME[@MODEL][=URL]`. `jev` defaults to https://api.typesafe.ai and jev-latest and
 needs TYPESAFE_API_KEY. Any other name needs a URL, asks for syn-latest, and sends
@@ -12,7 +13,6 @@ needs TYPESAFE_API_KEY. Any other name needs a URL, asks for syn-latest, and sen
 reference every other target is paired against.
 """
 
-import hashlib
 import json
 import math
 import os
@@ -27,6 +27,7 @@ import httpx
 
 from .evaluation import (
     bootstrap_ci,
+    example_digest,
     expected_calibration_error,
     paired_difference,
     percentile,
@@ -84,22 +85,25 @@ def parse_target(spec: str) -> Target:
     )
 
 
-def to_systemone(request: ScoreRequest, model: str) -> dict:
-    """One choice question; an option whose text is only its id goes without a description."""
+def to_systemone(request: ScoreRequest, model: str, ordinal: bool = False) -> dict:
+    """One question: the options as score levels for an ordinal row, else a choice. In a choice,
+    an option whose text is only its id goes without a description."""
     instructions = request.question
     if request.criteria:
         instructions += "\n\n" + request.criteria
-    return {
-        "state": request.context,
-        "model": model,
-        "questions": {
-            QUESTION: {
-                "type": "choice",
-                "instructions": instructions,
-                "criteria": {o.id: None if o.text == o.id else o.text for o in request.options},
-            }
-        },
-    }
+    if ordinal:
+        question = {
+            "type": "score",
+            "instructions": instructions,
+            "criteria": [o.text for o in request.options],
+        }
+    else:
+        question = {
+            "type": "choice",
+            "instructions": instructions,
+            "criteria": {o.id: None if o.text == o.id else o.text for o in request.options},
+        }
+    return {"state": request.context, "model": model, "questions": {QUESTION: question}}
 
 
 def _retry_after(response: httpx.Response) -> float | None:
@@ -139,15 +143,28 @@ def _post(
     return None, error, latency
 
 
-def _answer(body: dict, request: ScoreRequest) -> dict:
-    """The recorded fields of a choice answer; raises ValueError when it cannot be scored."""
+def _answer(body: dict, request: ScoreRequest, ordinal: bool = False) -> dict:
+    """The recorded fields of the answer; raises ValueError when it cannot be scored.
+
+    A score answer keys its probabilities by level index; they are mapped back to option ids,
+    the most probable level counts as the choice, and the expected level is kept as `score`.
+    """
+    ids = [o.id for o in request.options]
+    extra = {}
     try:
         answer = body["answers"][QUESTION]
         probabilities = {str(k): float(v) for k, v in answer["probabilities"].items()}
-        choice = str(answer["choice"])
+        if ordinal:
+            if set(probabilities) != {str(i) for i in range(len(ids))}:
+                raise ValueError("score probabilities do not name exactly the levels")
+            probabilities = {ids[int(k)]: v for k, v in probabilities.items()}
+            choice = max(probabilities, key=probabilities.__getitem__)
+            extra = {"score": float(answer["score"])}
+        else:
+            choice = str(answer["choice"])
     except (KeyError, TypeError, AttributeError, ValueError) as exc:
-        raise ValueError(f"no readable choice answer: {exc!r}") from exc
-    if set(probabilities) != {o.id for o in request.options} or choice not in probabilities:
+        raise ValueError(f"no readable answer: {exc!r}") from exc
+    if set(probabilities) != set(ids) or choice not in probabilities:
         raise ValueError("answer probabilities do not name exactly the options")
     values = probabilities.values()
     if not all(math.isfinite(p) and p >= 0 for p in values) or sum(values) <= 0:
@@ -157,13 +174,14 @@ def _answer(body: dict, request: ScoreRequest) -> dict:
         "model": body.get("model"),
         "choice": choice,
         "probabilities": probabilities,
+        **extra,
         "input_tokens": usage.get("input_tokens") if isinstance(usage, dict) else None,
     }
 
 
 def _digest(example: EvalExample) -> str:
     # Same digest as `syn evaluate`, so rows from both commands identify examples alike.
-    return hashlib.sha256(json.dumps(example.model_dump(), sort_keys=True).encode()).hexdigest()
+    return example_digest(example)
 
 
 def run_target(
@@ -199,13 +217,15 @@ def run_target(
 
     # One unrecorded request first: it wakes a scaled-to-zero GPU so the cold start is not
     # timed, and a missing endpoint or refused key stops the run before any row is written.
-    warmup = to_systemone(examples[pending[0]].request, target.model)
+    first = examples[pending[0]]
+    warmup = to_systemone(first.request, target.model, first.ordinal)
     _, error, _ = _post(client, target, warmup, retries, sleep)
     if error and error["status"] in FATAL_STATUSES:
         raise TargetError(f"{target.name} at {target.url}: {error['status']} {error['detail']}")
 
     def score(index: int) -> dict:
         example = examples[index]
+        ids = [o.id for o in example.request.options]
         row = {
             "example_index": index,
             "example_sha256": digests[index],
@@ -214,12 +234,19 @@ def run_target(
             "target_url": target.url,
             "requested_model": target.model,
         }
+        if example.ordinal:
+            row["expected_level"] = ids.index(example.expected_option_id)
         body, error, latency = _post(
-            client, target, to_systemone(example.request, target.model), retries, sleep
+            client,
+            target,
+            to_systemone(example.request, target.model, example.ordinal),
+            retries,
+            sleep,
         )
         if body is not None:
             try:
-                return {**row, **_answer(body, example.request), "latency_ms": latency}
+                answer = _answer(body, example.request, example.ordinal)
+                return {**row, **answer, "latency_ms": latency}
             except ValueError as exc:
                 error = {"status": 200, "detail": str(exc)[:500]}
         return {**row, "error": error}
@@ -265,6 +292,12 @@ def target_metrics(rows: list[dict], bootstrap: int = 1000) -> dict:
         briers.append(sum((p - (k == expected)) ** 2 for k, p in probs.items()))
     latencies = [row["latency_ms"] for row in scored]
     tokens = [row["input_tokens"] for row in scored if row.get("input_tokens") is not None]
+    # Score answers: how far the expected level sits from the true one, in levels.
+    level_errors = [
+        abs(row["score"] - row["expected_level"])
+        for row in scored
+        if "score" in row and "expected_level" in row
+    ]
     n = len(scored)
     return {
         **result,
@@ -275,6 +308,8 @@ def target_metrics(rows: list[dict], bootstrap: int = 1000) -> dict:
         "multiclass_brier": sum(briers) / n,
         "ece_10_bins": expected_calibration_error(confidence, correct),
         "mean_confidence": sum(confidence) / n,
+        "ordinal_rows": len(level_errors),
+        "level_mae": sum(level_errors) / len(level_errors) if level_errors else None,
         "latency_p50_ms": percentile(latencies, 0.5),
         "latency_p95_ms": percentile(latencies, 0.95),
         "input_tokens": sum(tokens) if tokens else None,

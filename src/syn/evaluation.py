@@ -20,6 +20,15 @@ PROFILE_FIELDS = (
 )
 
 
+def example_digest(example: EvalExample) -> str:
+    """Identifies the row by its request and answer only, so tags added later never break resume."""
+    body = {
+        "request": example.request.model_dump(),
+        "expected_option_id": example.expected_option_id,
+    }
+    return hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()
+
+
 def read_jsonl(path: Path) -> list[dict]:
     rows = []
     for line_number, line in enumerate(path.read_text().splitlines(), 1):
@@ -212,9 +221,7 @@ def evaluate(
                     rng.shuffle(permuted_options)
                     if permuted_options == example.request.options:
                         permuted_options = permuted_options[1:] + permuted_options[:1]
-                digest = hashlib.sha256(
-                    json.dumps(example.model_dump(), sort_keys=True).encode()
-                ).hexdigest()
+                digest = example_digest(example)
                 if index in previous:
                     if previous[index].get("example_sha256") != digest:
                         raise ValueError(

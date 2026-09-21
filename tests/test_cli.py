@@ -57,20 +57,39 @@ def test_cli_training_commands(monkeypatch, capsys):
 
     monkeypatch.setattr(
         "syn.features.extract_dataset",
-        lambda settings, dataset, out, limit: (
-            seen.setdefault("features", (settings.model, str(dataset), str(out), limit)) or {"n": 1}
+        lambda settings, dataset, out, limit, source: (
+            seen.setdefault("features", (settings.model, str(dataset), str(out), limit, source))
+            or {"n": 1}
         ),
     )
-    cli.main(["features", "d.jsonl", "--out", "f.npz", "--limit", "5"])
-    assert seen["features"] == ("Qwen/Qwen3-0.6B", "d.jsonl", "f.npz", 5)
+    cli.main(["features", "d.jsonl", "--out", "f.npz", "--limit", "5", "--source", "s"])
+    assert seen["features"] == ("Qwen/Qwen3-0.6B", "d.jsonl", "f.npz", 5, "s")
 
-    def fake_train(train, validation, out, **kwargs):
-        seen["train"] = (str(train), str(validation), str(out), kwargs)
+    def fake_train(train, validation, out, calibration=None, **kwargs):
+        seen["train"] = ([str(p) for p in train], [str(p) for p in validation], str(out), kwargs)
+        seen["calibration"] = calibration
         return {"best_val_top1": 1.0}
 
     monkeypatch.setattr("syn.training.train_head", fake_train)
-    cli.main(["train-head", "t.npz", "--validation", "v.npz", "--out", "h.st", "--rank", "8"])
-    assert seen["train"][:3] == ("t.npz", "v.npz", "h.st") and seen["train"][3]["rank"] == 8
+    cli.main(
+        ["train-head", "t.npz", "u.npz", "--validation", "v.npz", "--out", "h.st", "--rank", "8"]
+        + ["--p-none", "0.2", "--p-distract", "0.1", "--ordinal-weight", "0.5"]
+    )
+    assert seen["train"][:3] == (["t.npz", "u.npz"], ["v.npz"], "h.st")
+    kwargs = seen["train"][3]
+    assert kwargs["rank"] == 8 and kwargs["ordinal_weight"] == 0.5 and seen["calibration"] is None
+    assert (kwargs["augment"].p_none, kwargs["augment"].p_distract) == (0.2, 0.1)
+    with pytest.raises(SystemExit):
+        cli.main(["train-head", "t.npz", "--validation", "v.npz", "--out", "h", "--p-none", "2"])
+
+    def fake_transfer(train, validation, test, out, calibration=None, **kwargs):
+        seen["transfer"] = ([str(p) for p in test], str(out), [str(p) for p in calibration])
+        return {"sources": {}}
+
+    monkeypatch.setattr("syn.training.transfer", fake_transfer)
+    argv = ["transfer", "--train", "a.npz", "--validation", "b.npz", "--test", "c.npz", "d.npz"]
+    cli.main([*argv, "--calibration", "e.npz", "--out", "runs/t", "--epochs", "2"])
+    assert seen["transfer"] == (["c.npz", "d.npz"], "runs/t", ["e.npz"])
 
     monkeypatch.setattr(
         "syn.training.evaluate_head",

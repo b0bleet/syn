@@ -38,6 +38,16 @@ class FeatureResult:
     wait_ms: float | None = None
 
 
+@dataclass(frozen=True)
+class PointerResult:
+    # Final hidden state of the decide token, (H,) float32.
+    decide: object
+    # Final hidden state of each option's closing delimiter, (N, H) float32.
+    options: object
+    compute_ms: float
+    wait_ms: float | None = None
+
+
 class Backend(Protocol):
     def score(self, prompts: list[PreparedPrompt]) -> BackendResult: ...
 
@@ -49,6 +59,12 @@ class Backend(Protocol):
         """Frozen-backbone features for the trainable head."""
         ...
 
+    def pointer_states(
+        self, prefix_ids: list[int], spans: list[list[int]], delimiters: tuple[int, int, int]
+    ) -> PointerResult:
+        """Decide and option states for the pointer readout."""
+        ...
+
     def close(self) -> None: ...
 
 
@@ -57,8 +73,7 @@ def isolation_layout(prefix: list[int], spans: list[list[int]]):
 
     Returns ids, position ids, segment ids (0 = prefix, k = span k), and each span's start index.
     With the matching mask, each span's tokens see only the prefix and their own span, so their
-    likelihoods equal what separate prefix+span forwards would give (the construction in
-    jaredpalmer/kev's option isolation).
+    likelihoods equal what separate prefix+span forwards would give (option isolation).
     """
     p = len(prefix)
     ids, pos, seg, starts = list(prefix), list(range(p)), [0] * p, []
@@ -78,6 +93,40 @@ def block_mask(seg: list[int], dtype, device):
     length = len(seg)
     causal = torch.tril(torch.ones(length, length, dtype=torch.bool, device=device))
     same = (s[None, :] == s[:, None]) | (s[None, :] == 0)
+    allow = (causal & same) | torch.eye(length, dtype=torch.bool, device=device)
+    mask = torch.zeros(length, length, dtype=dtype, device=device)
+    return mask.masked_fill(~allow, torch.finfo(dtype).min)[None, None]
+
+
+DECIDE_SEGMENT = -1
+
+
+def pointer_layout(prefix: list[int], spans: list[list[int]], delimiters: tuple[int, int, int]):
+    """The pointer readout's sequence: prefix, every option wrapped in open and close delimiters
+    as its own isolated span, then one decide token.
+
+    Returns ids, position ids, segment ids (0 = prefix, k = span k, -1 = decide), the index of
+    each span's closing delimiter, and the decide token's index. Spans share positions, so the
+    decide token sits one past the longest span and sees the same thing whatever the order.
+    """
+    opened, closed, decide = delimiters
+    wrapped = [[opened, *span, closed] for span in spans]
+    ids, pos, seg, starts = isolation_layout(prefix, wrapped)
+    ends = [start + len(span) - 1 for start, span in zip(starts, wrapped, strict=True)]
+    ids.append(decide)
+    pos.append(len(prefix) + max(len(span) for span in wrapped))
+    seg.append(DECIDE_SEGMENT)
+    return ids, pos, seg, ends, len(ids) - 1
+
+
+def pointer_mask(seg: list[int], dtype, device):
+    """block_mask, except that the decide token (segment -1) attends to every earlier token."""
+    import torch
+
+    s = torch.tensor(seg, device=device)
+    length = len(seg)
+    causal = torch.tril(torch.ones(length, length, dtype=torch.bool, device=device))
+    same = (s[None, :] == s[:, None]) | (s[None, :] == 0) | (s[:, None] == DECIDE_SEGMENT)
     allow = (causal & same) | torch.eye(length, dtype=torch.bool, device=device)
     mask = torch.zeros(length, length, dtype=dtype, device=device)
     return mask.masked_fill(~allow, torch.finfo(dtype).min)[None, None]
@@ -123,9 +172,9 @@ class LocalBackend:
         self.batch_tokens = settings.local_batch_tokens
         self.lock = threading.Lock()
         # The pmi readout passes an explicit 4D mask. SDPA accepts it on CUDA; eager is the
-        # known-good path elsewhere (same choice as kev). Other readouts keep the library default.
+        # known-good path elsewhere. Other readouts keep the library default.
         attn = None
-        if settings.readout == "pmi":
+        if settings.readout in ("pmi", "pointer"):
             attn = "sdpa" if device == "cuda" else "eager"
         self.model = (
             AutoModelForCausalLM.from_pretrained(
@@ -281,6 +330,37 @@ class LocalBackend:
             wait_ms=(acquired - queued) * 1000,
         )
 
+    def pointer_states(
+        self, prefix_ids: list[int], spans: list[list[int]], delimiters: tuple[int, int, int]
+    ) -> PointerResult:
+        """One forward over the pointer layout; the decide and closing-delimiter states."""
+        torch = self.torch
+        queued = time.perf_counter()
+        ids, pos, seg, ends, decide = pointer_layout(prefix_ids, spans, delimiters)
+        base = self.model.model
+        with self.lock:
+            acquired = time.perf_counter()
+            with torch.inference_mode():
+                hidden = (
+                    base(
+                        input_ids=torch.tensor([ids], dtype=torch.long, device=self.device),
+                        position_ids=torch.tensor([pos], dtype=torch.long, device=self.device),
+                        attention_mask=pointer_mask(seg, self.dtype, self.device),
+                        use_cache=False,
+                    )
+                    .last_hidden_state[0]
+                    .float()
+                )
+                decide_np = hidden[decide].cpu().numpy()
+                options_np = hidden[ends].cpu().numpy()
+            finished = time.perf_counter()
+        return PointerResult(
+            decide_np,
+            options_np,
+            compute_ms=(finished - acquired) * 1000,
+            wait_ms=(acquired - queued) * 1000,
+        )
+
     def close(self):
         pass
 
@@ -399,6 +479,9 @@ class SGLangBackend:
 
     def features(self, prefix_ids: list[int], spans: list[list[int]]) -> FeatureResult:
         raise BackendError("The head readout needs hidden states; local backend only")
+
+    def pointer_states(self, prefix_ids, spans, delimiters) -> PointerResult:
+        raise BackendError("The pointer readout needs hidden states; local backend only")
 
     def info(self) -> dict:
         """What the remote server reports it is running. Never raises; see `reachable`."""

@@ -70,7 +70,7 @@ def _headers(response: ScoreResponse) -> dict[str, str]:
 
 
 def load_head(settings: Settings, config, commit: str | None):
-    """Load the head checkpoint and refuse one trained on a different backbone or rendering."""
+    """The head, its checksum, and its config; refuses a head from another backbone or rendering."""
     from .head import AttentionHead, file_sha256
 
     head, head_config = AttentionHead.load(settings.head_path)
@@ -88,7 +88,14 @@ def load_head(settings: Settings, config, commit: str | None):
                 f"Head at {settings.head_path} was trained with {field}={trained_on.get(field)!r}, "
                 f"but this service runs {field}={value!r}"
             )
-    return head, file_sha256(settings.head_path)
+    return head, file_sha256(settings.head_path), head_config
+
+
+def load_pointer(settings: Settings, config, tokenizer):
+    """The pointer head and its config; refuses one whose hidden size or delimiters differ."""
+    from .pointer import PointerReadout
+
+    return PointerReadout.load(settings.pointer_path, tokenizer, config.hidden_size)
 
 
 def check_remote(settings: Settings, backend, commit: str | None) -> dict:
@@ -160,10 +167,15 @@ def create_app(settings: Settings | None = None, scorer: Scorer | None = None) -
             else:
                 backend = SGLangBackend(settings)
                 check_remote(settings, backend, commit)
-            head, head_sha = (None, None)
+            head, head_sha, head_temperature, pointer = None, None, None, None
             if settings.readout == "head":
-                head, head_sha = load_head(settings, config, commit)
-            app.state.scorer = Scorer(settings, builder, backend, commit, head, head_sha)
+                head, head_sha, head_config = load_head(settings, config, commit)
+                head_temperature = head_config.get("temperature")
+            elif settings.readout == "pointer":
+                pointer = load_pointer(settings, config, tokenizer)
+            app.state.scorer = Scorer(
+                settings, builder, backend, commit, head, head_sha, head_temperature, pointer
+            )
         if not settings.api_key:
             logger.warning("SYN_API_KEY is unset; classification accepts unauthenticated requests")
         try:
@@ -199,6 +211,7 @@ def create_app(settings: Settings | None = None, scorer: Scorer | None = None) -
             "prompt_version": active.prompt_version if active else None,
             "readout": settings.readout,
             "head_sha256": active.head_sha256 if active else None,
+            "head_temperature": active.head_temperature if active else None,
             "orderings": settings.orderings,
             "auth": "bearer" if settings.api_key else "none",
             "remote_backend_checked": None,

@@ -64,7 +64,7 @@ def client():
 
 TICKET = {
     "state": "I was charged twice. Please fix this ASAP.",
-    "model": "kev-latest",
+    "model": "any-model-name",
     "questions": {
         "billing": {"type": "noul", "instructions": "Is this ticket about billing?"},
         "tone": {
@@ -180,7 +180,7 @@ def test_the_real_typesafe_sdk_round_trips():
         client = AsyncTypeSafeClient(
             api_key="k",
             base_url="http://syn",
-            model="kev-latest",
+            model="any-model-name",
             retry=RetryPolicy(max_retries=0),
             transport=httpx2.ASGITransport(app=build_app(Settings(api_key="k"))),
         )

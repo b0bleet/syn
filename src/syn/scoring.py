@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 
 from .backends import Backend, BackendError
 from .config import Settings
-from .prompt import CLOZE_VERSION, HEAD_VERSION, PromptBuilder
+from .prompt import CLOZE_VERSION, HEAD_VERSION, POINTER_VERSION, PromptBuilder
 from .schema import OptionScore, ScoreRequest, ScoreResponse
 
 # log_softmax can exceed zero by rounding; anything larger is a backend bug, not noise.
@@ -44,12 +44,22 @@ class Scorer:
         revision_commit: str | None = None,
         head=None,
         head_sha256: str | None = None,
+        head_temperature: float | None = None,
+        pointer=None,
     ):
         self.settings, self.builder, self.backend = settings, builder, backend
         self.revision_commit = revision_commit
         self.head, self.head_sha256 = head, head_sha256
+        # The temperature fitted when the head was trained. SYN_TEMPERATURE, when set, wins.
+        self.head_temperature = head_temperature
+        # A loaded PointerReadout: its head, temperature, delimiters, and checksum.
+        self.pointer = pointer
+        if pointer is not None:
+            self.head_sha256, self.head_temperature = pointer.sha256, pointer.temperature
         if settings.readout == "head" and head is None:
             raise ValueError("readout=head needs a loaded AttentionHead")
+        if settings.readout == "pointer" and pointer is None:
+            raise ValueError("readout=pointer needs a loaded PointerReadout")
         self.log_lock = threading.Lock()
         if settings.log_path:
             settings.log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -60,6 +70,8 @@ class Scorer:
             return CLOZE_VERSION
         if self.settings.readout == "head":
             return HEAD_VERSION
+        if self.settings.readout == "pointer":
+            return POINTER_VERSION
         return self.builder.version
 
     def score(self, request: ScoreRequest) -> ScoreResponse:
@@ -68,6 +80,8 @@ class Scorer:
             return self._score_pmi(request, started)
         if self.settings.readout == "head":
             return self._score_head(request, started)
+        if self.settings.readout == "pointer":
+            return self._score_pointer(request, started)
         return self._score_letters(request, started)
 
     def close(self):
@@ -183,6 +197,44 @@ class Scorer:
             started=started,
             queue_ms=result.wait_ms,
             backend_ms=result.compute_ms,
+            temperature=self.head_temperature,
+        )
+
+    def _score_pointer(self, request: ScoreRequest, started: float) -> ScoreResponse:
+        """The adapted backbone's decide and option states, scored by the pointer head.
+
+        Every option span sees only the prefix and itself, and the decide token sees all of
+        them from a fixed position, so the logits are invariant to option order by construction.
+        """
+        import numpy as np
+        import torch
+
+        cloze = self.builder.prepare_cloze(request, list_options=False)
+        count = len(request.options)
+        result = self.backend.pointer_states(
+            cloze.prefix_ids, cloze.span_ids, self.pointer.delimiters
+        )
+        decide = torch.from_numpy(np.asarray(result.decide, dtype=np.float32))[None]
+        options = torch.from_numpy(np.asarray(result.options, dtype=np.float32))[None]
+        if options.shape[1] != count:
+            raise BackendError("Backend returned the wrong number of option states")
+        with torch.inference_mode():
+            logits = self.pointer.head(decide, options)[0].tolist()
+        if any(not math.isfinite(x) for x in logits):
+            raise BackendError("Pointer head returned non-finite logits")
+        best = max(range(count), key=lambda i: logits[i])
+        return self._respond(
+            request,
+            scores=logits,
+            wins=[int(i == best) for i in range(count)],
+            orderings=1,
+            mass=None,
+            prompt_tokens=len(cloze.prefix_ids) + sum(len(span) + 2 for span in cloze.span_ids) + 1,
+            rewritten=cloze.rewritten_control_tokens,
+            started=started,
+            queue_ms=result.wait_ms,
+            backend_ms=result.compute_ms,
+            temperature=self.head_temperature,
         )
 
     def _respond(
@@ -198,9 +250,12 @@ class Scorer:
         started: float,
         queue_ms: float | None,
         backend_ms: float,
+        temperature: float | None = None,
     ) -> ScoreResponse:
         count = len(request.options)
-        probs = probabilities(scores, self.settings.temperature)
+        if temperature is None or "temperature" in self.settings.model_fields_set:
+            temperature = self.settings.temperature
+        probs = probabilities(scores, temperature)
         best = max(range(count), key=probs.__getitem__)
         chance = 1.0 / count
         confidence = min(1.0, max(0.0, (probs[best] - chance) / (1.0 - chance)))
@@ -233,7 +288,7 @@ class Scorer:
             ordering_agreement=agreement,
             orderings_scored=orderings,
             label_probability_mass=mass,
-            temperature=self.settings.temperature,
+            temperature=temperature,
             abstain_threshold=self.settings.abstain_threshold,
             min_confidence=self.settings.min_confidence,
             min_ordering_agreement=self.settings.min_ordering_agreement,
