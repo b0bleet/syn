@@ -1,10 +1,10 @@
 # syn
 
-Zero-shot option scoring on pretrained Qwen3 — no answer generation, no training required. Send a context, a question, and 2–26 options; get back a probability per option, the selected id, and abstention signals.
+Zero-shot option scoring on pretrained Qwen3. No answer generation, no training required. Send a context, a question, and 2-26 options; get back a probability per option, the selected id, and abstention signals.
 
 ## Run
 
-Requires Python 3.11–3.13 and [uv](https://docs.astral.sh/uv/).
+Requires Python 3.11-3.13 and [uv](https://docs.astral.sh/uv/).
 
 ```sh
 uv sync --extra local --locked
@@ -37,21 +37,21 @@ curl "http://127.0.0.1:8765/spam,ham/Win+a+free+iPhone?format=label"   # -> "spa
 curl "http://127.0.0.1:8765/billing,technical,sales/I+was+charged+twice?q=Which+team%3F"
 ```
 
-`+` means a space; percent-encode `%2C`, `%2B`, `%2F` inside labels. Interactive API docs at `/docs`, health at `/health`. A GET puts the classified text in the URL — it lands in access logs, so don't send personal data through it.
+`+` means a space; percent-encode `%2C`, `%2B`, `%2F` inside labels. Interactive API docs at `/docs`, health at `/health`. A GET puts the classified text in the URL, which lands in access logs, so don't send personal data through it.
 
 ## How it scores
 
-- **letters** (default): builds N cyclic option orderings so every option occupies every position once, reads label log-probs, averages, softmaxes. `ordering_agreement` exposes ordering disagreement — the signal that catches confidently wrong answers.
+- **letters** (default): builds N cyclic option orderings so every option occupies every position once, reads label log-probs, averages, softmaxes. `ordering_agreement` exposes ordering disagreement, the signal that catches confidently wrong answers.
 - **pmi**: scores each option's text likelihood given the context, prior-corrected, in one masked forward. Order-invariant by construction. Helps with short label words; weak on long descriptive options.
 - **head**: a trained cross-attention head over frozen backbone features (`syn train-head`); local backend only, needs `SYN_HEAD_PATH`.
 
 The service abstains (`selected_option_id: null`, `abstain_reasons`) below the `SYN_ABSTAIN_THRESHOLD`, `SYN_MIN_CONFIDENCE`, and `SYN_MIN_ORDERING_AGREEMENT` gates. Probabilities are option preferences, not calibrated success rates.
 
-Label wording changes answers more than anything else — use neutral, parallel labels and verify any label set on your own examples. `SYN_PROMPT_FORMAT=text` renders labelled sections instead of JSON for multi-line states.
+Label wording changes answers more than anything else. Use neutral, parallel labels and verify any label set on your own examples. `SYN_PROMPT_FORMAT=text` renders labelled sections instead of JSON for multi-line states.
 
 ## Data
 
-`scripts/download_data.py` rebuilds all of `data/` — the HF imports used for the measurements below, the synthetic routing set, and the `data/eval/` subsets:
+`scripts/download_data.py` rebuilds all of `data/`: the HF imports used for the measurements below, the synthetic routing set, and the `data/eval/` subsets:
 
 ```sh
 uv run --extra hub python scripts/download_data.py
@@ -77,7 +77,7 @@ uv run --extra local syn eval-head runs/head.safetensors runs/feats/test.npz
 SYN_READOUT=head SYN_HEAD_PATH=runs/head.safetensors uv run --extra local syn serve
 ```
 
-`eval-head` reports a shuffled-context control alongside real accuracy — if the control doesn't collapse toward chance, the head is reading option priors, not the state.
+`eval-head` reports a shuffled-context control alongside real accuracy; if the control doesn't collapse toward chance, the head is reading option priors, not the state.
 
 ## SGLang backend
 
@@ -96,7 +96,7 @@ Startup refuses a remote running a different model or revision; `/health` probes
 | `SYN_MODEL` | `Qwen/Qwen3-0.6B` | Qwen3 causal checkpoint |
 | `SYN_DEVICE` / `SYN_DTYPE` | `auto` | `cpu`/`mps`/`cuda`; `float32`/`bfloat16`/`float16` |
 | `SYN_READOUT` | `letters` | `letters`, `pmi`, `head` |
-| `SYN_PMI_LIST_OPTIONS` | `false` | pmi: name options in the prefix — helps some items, leaks order |
+| `SYN_PMI_LIST_OPTIONS` | `false` | pmi: name options in the prefix; helps some items, leaks order |
 | `SYN_HEAD_PATH` | unset | head: `.safetensors` checkpoint from `syn train-head` |
 | `SYN_PROMPT_FORMAT` | `json` | `json` or `text` |
 | `SYN_ORDERINGS` | `0` | Cyclic orderings per request; `0` = one per option |
