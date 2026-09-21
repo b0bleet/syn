@@ -71,9 +71,11 @@ def _headers(response: ScoreResponse) -> dict[str, str]:
 
 def load_head(settings: Settings, config, commit: str | None):
     """The head, its checksum, and its config; refuses a head from another backbone or rendering."""
+    from .artifacts import resolve_checkpoint
     from .head import AttentionHead, file_sha256
 
-    head, head_config = AttentionHead.load(settings.head_path)
+    path = resolve_checkpoint(settings.head_path)
+    head, head_config = AttentionHead.load(path)
     trained_on = head_config.get("features_meta", {})
     expected = {
         "model": settings.model,
@@ -88,14 +90,16 @@ def load_head(settings: Settings, config, commit: str | None):
                 f"Head at {settings.head_path} was trained with {field}={trained_on.get(field)!r}, "
                 f"but this service runs {field}={value!r}"
             )
-    return head, file_sha256(settings.head_path), head_config
+    return head, file_sha256(path), head_config
 
 
 def load_pointer(settings: Settings, config, tokenizer):
     """The pointer head and its config; refuses one whose hidden size or delimiters differ."""
+    from .artifacts import resolve_checkpoint
     from .pointer import PointerReadout
 
-    return PointerReadout.load(settings.pointer_path, tokenizer, config.hidden_size)
+    path = resolve_checkpoint(settings.pointer_path)
+    return PointerReadout.load(path, tokenizer, config.hidden_size)
 
 
 def check_remote(settings: Settings, backend, commit: str | None) -> dict:

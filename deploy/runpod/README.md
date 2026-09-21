@@ -52,23 +52,30 @@ against the same FastAPI app `syn serve` runs and returns `{"status", "headers",
 ## Train the general head on a pod
 
 `scripts/runpod_train.py` starts a GPU pod that clones this repository, caches features for
-every dataset under `data/` (rebuilt from Hugging Face on the pod), runs `syn transfer`, and
-stops itself. Nothing runs on your machine.
+every dataset under `data/`, runs `syn transfer`, and stops itself. Nothing runs on your
+machine, and nothing needs a volume: a private Hugging Face repo is the store.
 
 ```sh
 export RUNPOD_API_KEY=...            # console -> Settings -> API Keys
-uv run python scripts/runpod_train.py --model Qwen/Qwen3-8B --volume-id <network-volume> --wait
+export HF_TOKEN=...                  # huggingface.co/settings/tokens, write access
+uv run python scripts/hf_store.py push data --repo <user>/syn-training   # optional: your own rows
+uv run python scripts/runpod_train.py --model Qwen/Qwen3-8B --hf-repo <user>/syn-training --wait
 ```
 
-- **Network volume** (Storage -> New Network Volume, same data center as the endpoint,
-  50 GB is plenty): features land in `features/<model>/`, checkpoints and `RESULT.md` in
-  `heads/<model>/<run>/`, logs in `logs/`. Attach the same volume to the serverless endpoint
-  and set `SYN_READOUT=head` and `SYN_HEAD_PATH=/runpod-volume/heads/<model>/<run>/all-sources.safetensors`
-  to serve the trained head with its fitted temperature. Without a volume, results stay on
-  the pod's disk under `/workspace` until the pod is stopped; add `--keep` and copy them out.
+- **The repo** (`--hf-repo`, created private if missing) holds `data/<source>/*.jsonl` (your
+  rows and imported suites; the public datasets are rebuilt on the pod), `features/<model>/`
+  (cached once per backbone, pushed as soon as they are extracted, pulled by the next run),
+  `heads/<model>/<run>/` (checkpoints, `transfer.json`, `RESULT.md`), and `logs/`. Serve a
+  head from it with `SYN_READOUT=head` and
+  `SYN_HEAD_PATH=hf://<user>/syn-training/heads/<model>/<run>/all-sources.safetensors`, plus
+  `HF_TOKEN` on the endpoint; the worker downloads the two small files at startup.
+  `scripts/hf_store.py pull heads/<model>/<run> --repo <user>/syn-training --to runs` fetches
+  a run to your machine.
+- **A network volume** (`--volume-id`) still works instead of, or as well as, the repo; then
+  the same files sit under `/runpod-volume` and `SYN_HEAD_PATH` can be a path on it. Without
+  either, results stay on the pod's disk under `/workspace` until it is stopped.
 - `--suites DIR,...` imports extra System One labelled-request suites (see
-  `syn import-systemone`) from the volume before caching features; `--sources` restricts the
-  datasets; `--upload-repo` pushes the run to a Hugging Face repo (needs `HF_TOKEN`).
+  `syn import-systemone`) before caching features; `--sources` restricts the datasets.
 - `--ref` picks the commit the pod runs; it defaults to your current HEAD, so push first.
 - The `RESULT.md` table has one row per source: in-domain accuracy from the all-sources head,
   transfer accuracy from the head trained without that source, and the shuffled-context

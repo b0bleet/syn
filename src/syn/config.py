@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -22,8 +22,10 @@ class Settings(BaseSettings):
     # pointer: a backbone adapted by `syn train-pointer` (point `model` at its backbone/
     # directory) read by its pointer head. Local backend only; requires pointer_path.
     readout: Literal["letters", "pmi", "head", "pointer"] = "letters"
-    head_path: Path | None = None
-    pointer_path: Path | None = None
+    # A local checkpoint, or hf://<user>/<repo>/<path>.safetensors fetched from the Hub at
+    # startup together with its JSON sidecar (HF_TOKEN for a private repo).
+    head_path: str | None = None
+    pointer_path: str | None = None
     # pmi only. False: each option is scored from the context, the question, and its own text, so
     # the result is exactly invariant to option order by construction. True: the options are also
     # named in the prefix so the model knows the choice set, but that listing has an order and it
@@ -49,6 +51,11 @@ class Settings(BaseSettings):
     # rows x padded width would exceed this, then split, so long contexts cannot exhaust memory.
     local_batch_tokens: int = Field(default=16384, ge=1)
     log_path: Path | None = None
+
+    @field_validator("head_path", "pointer_path", mode="before")
+    @classmethod
+    def checkpoint_as_text(cls, value):
+        return str(value) if isinstance(value, Path) else value
 
     @model_validator(mode="after")
     def head_needs_a_checkpoint(self):

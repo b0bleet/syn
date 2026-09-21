@@ -3,27 +3,31 @@
     python deploy/runpod/train_job.py
 
 Written for a RunPod pod started by scripts/runpod_train.py, but any machine with a GPU and
-the [local,hub] extras installed works. Every step is skipped when its output already exists,
-so a rerun after a failure picks up where it stopped:
+the [local,hub] extras installed works. With SYN_TRAIN_HF_REPO set (and HF_TOKEN), a Hugging
+Face repo is the store and the pod needs no volume: data and cached features are pulled from
+it first, new features are pushed as soon as they are cached, and the run directory and log
+are pushed at the end (layout in src/syn/artifacts.py). Every step is skipped when its output
+already exists, so a rerun picks up where the last one stopped:
 
-1. data/: rebuild the public datasets (scripts/download_data.py) and import any System One
-   suites named in SYN_TRAIN_SUITES (directories of labelled requests, e.g. on the volume).
-2. features: cache frozen-backbone features for every source's train, validation,
-   calibration, and test splits under $SYN_TRAIN_ROOT/features/<model>/.
+1. data/: pull data/ from the repo (your own rows, imported suites), rebuild the public
+   datasets (scripts/download_data.py), and import any suites named in SYN_TRAIN_SUITES.
+2. features: pull features/<model>/ from the repo, cache the missing files for every
+   source's train, validation, calibration, and test splits under
+   $SYN_TRAIN_ROOT/features/<model>/, and push the new ones.
 3. transfer: train the head on all sources and once without each source, with calibration in
    the checkpoint, the ordinal loss, and none/distractor augmentation, under
    $SYN_TRAIN_ROOT/heads/<model>/<run>/. RESULT.md there is the summary; it is also printed.
-4. Optionally upload the run directory to a Hugging Face repo (HF_TOKEN and
-   SYN_TRAIN_UPLOAD_REPO), then stop the pod on success (RUNPOD_POD_ID and RUNPOD_API_KEY
-   present, SYN_TRAIN_STOP_POD not 0). On failure the pod stays up so its logs can be read.
+   The run directory and the log go to heads/<model>/<run>/ and logs/ in the repo.
+4. Stop the pod on success (RUNPOD_POD_ID and RUNPOD_API_KEY present, SYN_TRAIN_STOP_POD
+   not 0). On failure the pod stays up so its logs can be read.
 
 Backbone settings are the usual SYN_MODEL, SYN_REVISION, SYN_DTYPE. Job settings:
-SYN_TRAIN_ROOT (default /runpod-volume when mounted, else /workspace), SYN_TRAIN_SOURCES
-(comma-separated data/ directories; default every one with train, validation, and test),
-SYN_TRAIN_SUITES, SYN_TRAIN_RUN (default a timestamp), SYN_TRAIN_LIMIT_PER_SOURCE (2000),
-SYN_TRAIN_EPOCHS (8), SYN_TRAIN_RANK (256), SYN_TRAIN_LR (5e-4), SYN_TRAIN_SEED (7),
-SYN_TRAIN_P_NONE (0.1), SYN_TRAIN_P_NONE_DISTRACT (0.12), SYN_TRAIN_P_DISTRACT (0.15),
-SYN_TRAIN_ORDINAL_WEIGHT (1.0).
+SYN_TRAIN_HF_REPO (<user>/<repo>, needs HF_TOKEN), SYN_TRAIN_ROOT (default /runpod-volume
+when mounted, else /workspace), SYN_TRAIN_SOURCES (comma-separated data/ directories; default
+every one with train, validation, and test), SYN_TRAIN_SUITES, SYN_TRAIN_RUN (default a
+timestamp), SYN_TRAIN_LIMIT_PER_SOURCE (2000), SYN_TRAIN_EPOCHS (8), SYN_TRAIN_RANK (256),
+SYN_TRAIN_LR (5e-4), SYN_TRAIN_SEED (7), SYN_TRAIN_P_NONE (0.1), SYN_TRAIN_P_NONE_DISTRACT
+(0.12), SYN_TRAIN_P_DISTRACT (0.15), SYN_TRAIN_ORDINAL_WEIGHT (1.0).
 
 Memory: features are float16 and stay in RAM while heads train. At hidden size 4096 that is
 about one megabyte per row, so 2000 rows per source over six sources needs around 20 GB.
@@ -64,9 +68,22 @@ def has_rows(path: Path) -> bool:
     return path.exists() and path.stat().st_size > 0
 
 
-def build_data(log) -> None:
+def store() -> str | None:
+    """The Hugging Face repo that holds data, features, and heads, when configured."""
+    repo = setting("HF_REPO", None)
+    if repo and not os.environ.get("HF_TOKEN"):
+        raise SystemExit("SYN_TRAIN_HF_REPO needs HF_TOKEN (a write token) in the environment")
+    return repo
+
+
+def build_data(repo: str | None, log) -> None:
+    if repo:
+        from syn.artifacts import pull
+
+        fetched = pull(repo, "data", REPO)
+        log(f"pulled {len(fetched)} data files from {repo}")
     if not has_rows(DATA / "agnews" / "train.jsonl"):
-        log("rebuilding data/ from Hugging Face")
+        log("rebuilding the public datasets under data/")
         subprocess.run(
             [sys.executable, str(REPO / "scripts" / "download_data.py")], check=True, cwd=REPO
         )
@@ -95,8 +112,15 @@ def sources() -> list[Path]:
     ]
 
 
-def cache_features(dirs: list[Path], root: Path, log) -> dict[str, list[Path]]:
+def cache_features(
+    dirs: list[Path], root: Path, repo: str | None, model_slug: str, log
+) -> dict[str, list[Path]]:
     """Feature files per split; extracts the missing ones with one loaded backbone."""
+    if repo:
+        from syn.artifacts import pull
+
+        fetched = pull(repo, f"features/{model_slug}", root.parent.parent)
+        log(f"pulled {len(fetched)} feature files from {repo}")
     files: dict[str, list[Path]] = {split: [] for split in SPLITS}
     pending = []
     for directory in dirs:
@@ -134,15 +158,25 @@ def cache_features(dirs: list[Path], root: Path, log) -> dict[str, list[Path]]:
         "revision_commit": revision_commit(config),
         "dtype": str(backend.dtype).replace("torch.", ""),
     }
-    for directory, split, dataset, out in pending:
-        examples = [EvalExample.model_validate(row) for row in read_jsonl(dataset)]
-        meta = {
-            **base,
-            "dataset": str(dataset),
-            "dataset_sha256": hashlib.sha256(dataset.read_bytes()).hexdigest(),
-        }
-        result = extract_with(backend, builder, examples, out, meta, source=directory.name)
-        log(f"{directory.name}/{split}: {result['n']} rows in {result['seconds']} s -> {out}")
+    cached = 0
+    try:
+        for directory, split, dataset, out in pending:
+            examples = [EvalExample.model_validate(row) for row in read_jsonl(dataset)]
+            meta = {
+                **base,
+                "dataset": str(dataset),
+                "dataset_sha256": hashlib.sha256(dataset.read_bytes()).hexdigest(),
+            }
+            result = extract_with(backend, builder, examples, out, meta, source=directory.name)
+            cached += 1
+            log(f"{directory.name}/{split}: {result['n']} rows in {result['seconds']} s -> {out}")
+    finally:
+        # Whatever was cached survives the pod, even when a later file fails.
+        if repo and cached:
+            from syn.artifacts import push
+
+            url = push(repo, root, f"features/{model_slug}", f"Cache {cached} feature files")
+            log(f"pushed {cached} feature files to {repo}: {url}")
     return files
 
 
@@ -171,7 +205,7 @@ def train(files: dict[str, list[Path]], out_dir: Path, log) -> dict:
     )
 
 
-def summary(report: dict, model: str, run_dir: Path) -> str:
+def summary(report: dict, model: str, run_dir: Path, serve_path: str) -> str:
     general = report["general"]
     lines = [
         f"# General head on {model}",
@@ -181,6 +215,8 @@ def summary(report: dict, model: str, run_dir: Path) -> str:
             f"{general['best_val_top1']:.3f}, temperature {general['temperature']:.2f} "
             f"(fitted on {general['temperature_fit']['on']})."
         ),
+        "",
+        f"Serve it with `SYN_READOUT=head SYN_HEAD_PATH={serve_path}`.",
         "",
         (
             "Transfer holds the source out of training entirely; in-domain is the all-sources "
@@ -207,19 +243,6 @@ def summary(report: dict, model: str, run_dir: Path) -> str:
     return "\n".join(lines) + "\n"
 
 
-def upload(run_dir: Path, log) -> None:
-    repo = setting("UPLOAD_REPO", None)
-    token = os.environ.get("HF_TOKEN")
-    if not repo or not token:
-        return
-    from huggingface_hub import HfApi
-
-    api = HfApi(token=token)
-    api.create_repo(repo, exist_ok=True, private=True)
-    api.upload_folder(folder_path=str(run_dir), repo_id=repo, path_in_repo=run_dir.name)
-    log(f"uploaded {run_dir} to {repo}/{run_dir.name}")
-
-
 def stop_pod(log) -> None:
     pod, key = os.environ.get("RUNPOD_POD_ID"), os.environ.get("RUNPOD_API_KEY")
     if not pod or not key or setting("STOP_POD", "1") == "0":
@@ -235,12 +258,14 @@ def stop_pod(log) -> None:
 def main() -> None:
     started = time.time()
     model = os.environ.get("SYN_MODEL", "Qwen/Qwen3-0.6B")
+    model_slug = slug(model)
+    repo = store()
     root = Path(
         setting("ROOT", "/runpod-volume" if Path("/runpod-volume").is_dir() else "/workspace")
     )
     run = setting("RUN", datetime.now(UTC).strftime("%Y%m%d-%H%M%S"))
-    features_dir = root / "features" / slug(model)
-    run_dir = root / "heads" / slug(model) / run
+    features_dir = root / "features" / model_slug
+    run_dir = root / "heads" / model_slug / run
     logs = root / "logs"
     logs.mkdir(parents=True, exist_ok=True)
     log_file = (logs / f"{run}.log").open("a")
@@ -251,19 +276,27 @@ def main() -> None:
         log_file.write(line + "\n")
         log_file.flush()
 
-    log(f"model {model}, root {root}, run {run}")
-    build_data(log)
+    log(f"model {model}, root {root}, run {run}, store {repo or 'local only'}")
+    build_data(repo, log)
     dirs = sources()
     if len(dirs) < 2:
         raise SystemExit(f"Need at least two sources with train, validation, and test; got {dirs}")
     log(f"sources: {[d.name for d in dirs]}")
     features_dir.mkdir(parents=True, exist_ok=True)
-    files = cache_features(dirs, features_dir, log)
+    files = cache_features(dirs, features_dir, repo, model_slug, log)
     report = train(files, run_dir, log)
-    text = summary(report, model, run_dir)
+    head_in_repo = f"heads/{model_slug}/{run}/all-sources.safetensors"
+    serve_path = f"hf://{repo}/{head_in_repo}" if repo else str(run_dir / "all-sources.safetensors")
+    text = summary(report, model, run_dir, serve_path)
     (run_dir / "RESULT.md").write_text(text)
     print(text, flush=True)
-    upload(run_dir, log)
+    if repo:
+        from syn.artifacts import push
+
+        url = push(repo, run_dir, f"heads/{model_slug}/{run}", f"Add run {run} on {model}")
+        log(f"pushed the run to {repo}: {url}")
+        log_file.flush()
+        push(repo, logs, "logs", f"Add log {run}")
     log("done")
     stop_pod(log)
 
