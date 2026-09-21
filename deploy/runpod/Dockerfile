@@ -13,7 +13,7 @@ COPY pyproject.toml ./
 COPY src ./src
 RUN pip install --no-cache-dir ".[local]" "runpod>=1.7,<2" "hf_transfer>=0.1,<1"
 
-COPY deploy/runpod/handler.py ./handler.py
+COPY handler.py ./handler.py
 
 ENV SYN_BACKEND=local \
     SYN_READOUT=letters \
