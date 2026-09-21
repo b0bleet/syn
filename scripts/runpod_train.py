@@ -38,7 +38,9 @@ command -v git >/dev/null || (apt-get update -qq && apt-get install -y -qq git >
 if [ ! -d /app/.git ]; then git clone --quiet "$SYN_GIT_URL" /app; fi
 cd /app
 git fetch --quiet --depth 1 origin "$SYN_GIT_REF" && git checkout --quiet FETCH_HEAD
-pip install --quiet ".[local,hub]" hf_transfer huggingface_hub
+extras="local,hub"
+if [ "${SYN_TRAIN_TASK:-head}" = "pointer" ]; then extras="local,hub,train"; fi
+pip install --quiet ".[$extras]" hf_transfer huggingface_hub
 python deploy/runpod/train_job.py
 """
 
@@ -60,6 +62,7 @@ def build_request(args: argparse.Namespace) -> dict:
         "SYN_GIT_URL": args.repo or repo_url(),
         "SYN_GIT_REF": args.ref or git("rev-parse", "HEAD"),
         "SYN_MODEL": args.model,
+        "SYN_TRAIN_TASK": args.task,
         "SYN_TRAIN_RUN": run,
         "SYN_TRAIN_LIMIT_PER_SOURCE": str(args.limit_per_source),
         "SYN_TRAIN_EPOCHS": str(args.epochs),
@@ -140,6 +143,13 @@ def wait(pod_id: str, where: str) -> None:
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--model", default="Qwen/Qwen3-8B")
+    parser.add_argument(
+        "--task",
+        choices=["head", "pointer"],
+        default="head",
+        help="head caches frozen features and trains the general head; "
+        "pointer adapts the backbone on pointer-data/ and trains the pointer head",
+    )
     parser.add_argument("--revision", help="Pin the backbone to a commit (SYN_REVISION)")
     parser.add_argument("--gpu", default="NVIDIA L40S", help="RunPod GPU type id")
     parser.add_argument("--cloud", default="SECURE", choices=["SECURE", "COMMUNITY"])

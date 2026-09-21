@@ -18,6 +18,10 @@ already exists, so a rerun picks up where the last one stopped:
    the checkpoint, the ordinal loss, and none/distractor augmentation, under
    $SYN_TRAIN_ROOT/heads/<model>/<run>/. RESULT.md there is the summary; it is also printed.
    The run directory and the log go to heads/<model>/<run>/ and logs/ in the repo.
+   SYN_TRAIN_TASK=pointer skips the feature cache and instead adapts the backbone
+   (rank-16 adapters, merged on save) and trains the pointer head on pointer-data/
+   from the same store. The run lands at pointers/<model>/<run>/, including the merged
+   backbone, and a held-out file pointer-data/transfer-dev.jsonl is scored at the end.
 4. Stop the pod on success (RUNPOD_POD_ID and RUNPOD_API_KEY present, SYN_TRAIN_STOP_POD
    not 0). On failure the pod stays up so its logs can be read.
 
@@ -28,6 +32,10 @@ every one with train, validation, and test), SYN_TRAIN_SUITES, SYN_TRAIN_RUN (de
 timestamp), SYN_TRAIN_LIMIT_PER_SOURCE (2000), SYN_TRAIN_EPOCHS (8), SYN_TRAIN_RANK (256),
 SYN_TRAIN_LR (5e-4), SYN_TRAIN_SEED (7), SYN_TRAIN_P_NONE (0.1), SYN_TRAIN_P_NONE_DISTRACT
 (0.12), SYN_TRAIN_P_DISTRACT (0.15), SYN_TRAIN_ORDINAL_WEIGHT (1.0).
+Pointer task: SYN_TRAIN_POINTER_RANK (16), SYN_TRAIN_POINTER_EPOCHS (2),
+SYN_TRAIN_POINTER_LR (5e-5), SYN_TRAIN_POINTER_BATCH (1), SYN_TRAIN_POINTER_ACCUMULATE (8),
+SYN_TRAIN_POINTER_MAX_TOKENS (1024), SYN_TRAIN_POINTER_CHECKPOINTING (1). Rows come from
+pointer-data/<source>/{train,validation,calibration}.jsonl, not from data/.
 
 Memory: features are float16 and stay in RAM while heads train. At hidden size 4096 that is
 about one megabyte per row, so 2000 rows per source over six sources needs around 20 GB.
@@ -96,6 +104,47 @@ def build_data(repo: str | None, log) -> None:
 
         log(f"importing {path} -> {out}")
         log(json.dumps(convert([path], out)))
+
+
+def pointer_rows(root: Path) -> dict[str, list[Path]]:
+    """Train, validation, and calibration JSONL files for the pointer task.
+
+    `root` is the pointer-data directory. SYN_TRAIN_SOURCES limits which subdirectories
+    are read. A directory counts when it has non-empty train and validation files.
+    """
+    wanted = setting("SOURCES", None, names)
+    dirs = (
+        [root / name for name in wanted]
+        if wanted
+        else sorted(path for path in root.iterdir() if path.is_dir())
+    )
+    files: dict[str, list[Path]] = {"train": [], "validation": [], "calibration": []}
+    for directory in dirs:
+        if not directory.is_dir():
+            raise SystemExit(f"Missing source directory {directory}")
+        if not (has_rows(directory / "train.jsonl") and has_rows(directory / "validation.jsonl")):
+            continue
+        for split in ("train", "validation", "calibration"):
+            path = directory / f"{split}.jsonl"
+            if has_rows(path):
+                files[split].append(path)
+    if not files["train"]:
+        raise SystemExit(f"No pointer training rows under {root}")
+    return files
+
+
+def prepare_pointer_data(repo: str | None, log) -> tuple[Path, Path | None]:
+    """Pull pointer-data/ from the store. Returns that directory and the held-out file, if any."""
+    root = REPO / "pointer-data"
+    if repo:
+        from syn.artifacts import pull
+
+        fetched = pull(repo, "pointer-data", REPO)
+        log(f"pulled {len(fetched)} pointer-data files from {repo}")
+    if not root.is_dir():
+        raise SystemExit("Pointer training needs pointer-data/ in the store or on disk")
+    held_out = root / "transfer-dev.jsonl"
+    return root, held_out if has_rows(held_out) else None
 
 
 def sources() -> list[Path]:
@@ -243,6 +292,69 @@ def summary(report: dict, model: str, run_dir: Path, serve_path: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+def run_pointer(repo: str | None, root: Path, model: str, model_slug: str, run: str, log) -> None:
+    """Adapt the backbone and train the pointer head on pointer-data/, then score the held-out file."""
+    from syn.pointer import train_pointer
+    from syn.training import Augment
+
+    data_root, held_out = prepare_pointer_data(repo, log)
+    files = pointer_rows(data_root)
+    log(
+        "pointer rows: "
+        + ", ".join(f"{split} {len(paths)}" for split, paths in files.items() if paths)
+    )
+    run_dir = root / "pointers" / model_slug / run
+    report = train_pointer(
+        files["train"],
+        files["validation"],
+        run_dir,
+        calibration=files["calibration"] or None,
+        test=held_out,
+        rank=setting("POINTER_RANK", 16, int),
+        head_dim=setting("POINTER_HEAD_DIM", 256, int),
+        epochs=setting("POINTER_EPOCHS", 2, int),
+        lr=setting("POINTER_LR", 5e-5, float),
+        batch_size=setting("POINTER_BATCH", 1, int),
+        accumulate=setting("POINTER_ACCUMULATE", 8, int),
+        weight_decay=setting("POINTER_WEIGHT_DECAY", 0.01, float),
+        seed=setting("SEED", 7, int),
+        augment=Augment(
+            setting("P_NONE", 0.1, float),
+            setting("P_NONE_DISTRACT", 0.12, float),
+            setting("P_DISTRACT", 0.15, float),
+        ),
+        ordinal_weight=setting("ORDINAL_WEIGHT", 1.0, float),
+        max_tokens=setting("POINTER_MAX_TOKENS", 1024, int),
+        limit_per_source=setting("LIMIT_PER_SOURCE", 0, int),
+        checkpointing=setting("POINTER_CHECKPOINTING", "1") != "0",
+        log=log,
+    )
+    lines = [
+        f"# Pointer readout on {model}",
+        "",
+        f"Validation top-1 {report['best_val_top1']:.3f}. Temperature {report['temperature']}.",
+    ]
+    if report.get("held_out_top1") is not None:
+        lines.append(f"Held-out top-1 {report['held_out_top1']:.3f} on `{held_out}`.")
+    serve = (
+        f"SYN_MODEL={run_dir / 'backbone'} SYN_READOUT=pointer "
+        f"SYN_POINTER_PATH={run_dir / 'pointer.safetensors'}"
+    )
+    lines += ["", f"Serve with `{serve}`."]
+    if repo:
+        lines.append(f"The run is in the store at `pointers/{model_slug}/{run}/`.")
+    text = "\n".join(lines) + "\n"
+    (run_dir / "RESULT.md").write_text(text)
+    print(text, flush=True)
+    if repo:
+        from syn.artifacts import push
+
+        url = push(
+            repo, run_dir, f"pointers/{model_slug}/{run}", f"Add pointer run {run} on {model}"
+        )
+        log(f"pushed the pointer run to {repo}: {url}")
+
+
 def stop_pod(log) -> None:
     pod, key = os.environ.get("RUNPOD_POD_ID"), os.environ.get("RUNPOD_API_KEY")
     if not pod or not key or setting("STOP_POD", "1") == "0":
@@ -276,7 +388,20 @@ def main() -> None:
         log_file.write(line + "\n")
         log_file.flush()
 
-    log(f"model {model}, root {root}, run {run}, store {repo or 'local only'}")
+    mode = setting("TASK", "head")
+    if mode not in ("head", "pointer"):
+        raise SystemExit(f"SYN_TRAIN_TASK must be head or pointer, got {mode!r}")
+    log(f"model {model}, root {root}, run {run}, task {mode}, store {repo or 'local only'}")
+    if mode == "pointer":
+        run_pointer(repo, root, model, model_slug, run, log)
+        log("done")
+        log_file.flush()
+        if repo:
+            from syn.artifacts import push
+
+            push(repo, logs, "logs", f"Add log {run}")
+        stop_pod(log)
+        return
     build_data(repo, log)
     dirs = sources()
     if len(dirs) < 2:

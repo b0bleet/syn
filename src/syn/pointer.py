@@ -321,6 +321,7 @@ def train_pointer(
     out_dir,
     *,
     calibration=None,
+    test=None,
     rank: int = 16,
     head_dim: int = 256,
     epochs: int = 2,
@@ -373,6 +374,7 @@ def train_pointer(
     train_rows = load_rows(train, limit_per_source)
     val_rows = load_rows(validation)
     cal_rows = load_rows(calibration) if calibration else None
+    test_rows = load_rows(test) if test else None
     anchors = load_anchors(anchor) if anchor else None
     if anchors is not None:
         from .evaluation import example_digest
@@ -508,7 +510,17 @@ def train_pointer(
     )
     temperature = fit["temperature"]
     final = evaluate(val_rows, temperature)
+    held_out = evaluate(test_rows, temperature) if test_rows else None
     log(json.dumps({"temperature": temperature, "val_nll": final.get("negative_log_likelihood")}))
+    if held_out is not None:
+        log(
+            json.dumps(
+                {
+                    "held_out_top1": held_out.get("top1"),
+                    "held_out_nll": held_out.get("negative_log_likelihood"),
+                }
+            )
+        )
 
     backbone_dir = out_dir / "backbone"
     merged = peft_model.merge_and_unload()
@@ -552,6 +564,7 @@ def train_pointer(
                 "negative_log_likelihood": final.get("negative_log_likelihood"),
                 "ece_10_bins": final.get("ece_10_bins"),
             },
+            "held_out": held_out,
             "history": history,
         },
     )
@@ -559,6 +572,7 @@ def train_pointer(
         "backbone": str(backbone_dir),
         "pointer": str(head_path),
         "best_val_top1": best,
+        "held_out_top1": None if held_out is None else held_out.get("top1"),
         "temperature": temperature,
         "temperature_fit": fit,
         "epochs": epochs,

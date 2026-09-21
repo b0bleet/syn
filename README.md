@@ -91,7 +91,7 @@ uv run --extra local syn transfer --train runs/feats/*-train.npz --validation ru
   --test runs/feats/*-test.npz --out runs/transfer
 ```
 
-trains one head on all sources and one without each source, then tests every held-out head on the source it never saw; `transfer.json` lists in-domain, transfer, and control accuracy per source. `scripts/runpod_train.py` runs the whole pipeline on a RunPod GPU with a Hugging Face repo as the store (see `deploy/runpod/README.md`): `scripts/hf_store.py push data --repo <user>/syn-training` uploads your rows, the pod pulls them and pushes cached features and trained heads back, and the service loads a head straight from the repo with `SYN_HEAD_PATH=hf://<user>/syn-training/heads/<model>/<run>/all-sources.safetensors`.
+trains one head on all sources and one without each source, then tests every held-out head on the source it never saw; `transfer.json` lists in-domain, transfer, and control accuracy per source. `scripts/runpod_train.py` runs the whole pipeline on a RunPod GPU with a Hugging Face repo as the store (see `deploy/runpod/README.md`): `scripts/hf_store.py push data --repo <user>/syn-training` uploads your rows, the pod pulls them and pushes cached features and trained heads back, and the service loads a head straight from the repo with `SYN_HEAD_PATH=hf://<user>/syn-training/heads/<model>/<run>/all-sources.safetensors`. `--task pointer` is the adapted-backbone run: it trains on `pointer-data/` in that repo and writes `pointers/<model>/<run>/`.
 
 System One suites, labelled `/v1/systemone` requests (a `state`, `questions` with a `label` each), import as rows with `syn import-systemone <dir> --out data/<name>`; score questions come out ordinal, and rows render exactly as the service renders them.
 

@@ -85,10 +85,14 @@ uv run python scripts/runpod_train.py --model Qwen/Qwen3-8B --hf-repo <user>/syn
 - The pod runs `deploy/runpod/train_job.py`, which also works on any GPU box with the
   `[local,hub]` extras. On failure the pod stays up so its logs can be read; stop it with
   `--stop <pod-id>`.
-- `syn train-pointer` (adapters on the backbone plus a pointer head) is not part of the job
-  yet: run it on a pod started with `--keep`, or on any GPU box, against the rows in `data/`.
-  Serve its output from the volume with `SYN_MODEL=/runpod-volume/<run>/backbone`,
-  `SYN_READOUT=pointer`, and `SYN_POINTER_PATH=/runpod-volume/<run>/pointer.safetensors`.
+- `--task pointer` adapts the backbone and trains the pointer head. It reads
+  `pointer-data/<source>/{train,validation,calibration}.jsonl` from the store, scores
+  `pointer-data/transfer-dev.jsonl` when that file is present, and pushes the merged
+  backbone plus `pointer.safetensors` to `pointers/<model>/<run>/`. Two epochs, adapter
+  rank 16, batch 1 with 8 accumulation steps, and gradient checkpointing. Serve with
+  `SYN_MODEL` pointed at that run's `backbone/` directory, `SYN_READOUT=pointer`, and
+  `SYN_POINTER_PATH` pointed at `pointer.safetensors`. The head task does not read
+  `pointer-data/`.
 
 ## Notes
 
