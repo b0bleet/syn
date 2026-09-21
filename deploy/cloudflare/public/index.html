@@ -18,7 +18,7 @@ a { color: inherit; text-underline-offset: 3px; }
 header { display: flex; justify-content: space-between; align-items: baseline; gap: 20px; }
 .logo { font-size: 24px; font-weight: bold; text-decoration: none; }
 nav { display: flex; gap: 24px; font-size: 12px; }
-main { flex: 1; display: flex; flex-direction: column; justify-content: center; padding: 36px 0; }
+main { flex: 1; display: flex; flex-direction: column; justify-content: flex-start; padding: clamp(32px, 7vh, 64px) 0 32px; }
 h1 { font-size: 22px; line-height: 1.4; font-weight: normal; margin: 0 0 12px; }
 .description { margin: 0 0 32px; font-size: 13px; }
 .work { display: grid; grid-template-columns: 1.2fr 1fr; gap: 48px; }
@@ -34,7 +34,7 @@ button:disabled { cursor: wait; }
 .shortcut, .quota, .meta { font-size: 11px; }
 .quota { margin: 20px 0 0; }
 .output { min-width: 0; }
-.result { overflow-wrap: anywhere; max-height: 350px; overflow: auto; }
+.result { overflow-wrap: anywhere; min-height: 90px; max-height: 190px; overflow: auto; }
 .result p { margin-top: 0; }
 .empty { font-size: 13px; }
 .answer { font-size: 26px; margin-bottom: 8px; }
@@ -52,6 +52,12 @@ h3 { font-size: 14px; margin: 24px 0 8px; }
 pre { overflow: auto; border: 1px solid #000; padding: 16px; font-size: 12px; }
 .copy { font-size: 11px; padding: 4px 10px; }
 .docs-note { font-size: 12px; }
+.examples { margin-top: 24px; }
+.examples h2, .api-example h2 { font-size: 12px; font-weight: normal; margin: 0 0 10px; }
+.example { display: block; border: 0; padding: 3px 0; margin: 0 0 8px; font-size: 12px; text-align: left; text-decoration: underline; text-underline-offset: 3px; }
+.api-example { margin-top: 24px; font-size: 11px; }
+.api-example code { display: block; overflow-wrap: anywhere; margin-bottom: 8px; }
+.api-example .copy { padding: 0; border: 0; text-decoration: underline; text-underline-offset: 3px; }
 @media (min-width: 701px) and (max-height: 720px) {
   .site { padding-top: 20px; }
   main { padding: 24px 0; }
@@ -89,7 +95,12 @@ pre { overflow: auto; border: 1px solid #000; padding: 16px; font-size: 12px; }
           <div class="actions"><button id="go">Classify</button><span class="shortcut">Ctrl / ⌘ + Enter</span></div>
           <p class="quota" id="quota">1,000 free units per IP per day.</p>
         </div>
-        <div class="output"><h2 class="result-title">Result</h2><div class="result" id="result" aria-live="polite" aria-atomic="true"><p class="empty">Your result will appear here.</p></div></div>
+        <div class="output">
+          <h2 class="result-title">Result</h2>
+          <div class="result" id="result" aria-live="polite" aria-atomic="true"><p class="empty">Your result will appear here.</p></div>
+          <div class="examples" id="examples"><h2>Try an example</h2></div>
+          <div class="api-example"><h2>Or use the API</h2><code>curl <span class="origin">https://sifty.dev</span>/spam,not+spam/Win+a+free+iPhone</code><button class="copy" data-copy>Copy</button></div>
+        </div>
       </div>
     </section>
     <section id="docs" aria-labelledby="docs-title" hidden>
@@ -128,6 +139,25 @@ print(response.nouls["billing"].noul)</code></pre><button class="copy" data-copy
 <script>
   const $ = (id) => document.getElementById(id);
   const text = $("text"), labels = $("labels"), go = $("go"), result = $("result"), quota = $("quota");
+
+  const examples = [
+    ["Detect spam", "Congratulations! You have won a free iPhone. Click the link to claim your prize.", "spam, not spam"],
+    ["Check sentiment", "The battery died after two days and support never replied.", "positive, negative, neutral"],
+    ["Route a support ticket", "I was charged twice for my subscription this month.", "billing, technical issue, account access"],
+  ];
+  for (const [name, input, options] of examples) {
+    const button = document.createElement("button");
+    button.className = "example";
+    button.textContent = name;
+    button.onclick = () => {
+      if (go.disabled) return;
+      text.value = input;
+      labels.value = options;
+      show("empty", "Example loaded. Click Classify to see the result.");
+      text.focus();
+    };
+    $("examples").append(button);
+  }
 
   for (const el of document.querySelectorAll(".origin")) el.textContent = location.origin;
   for (const button of document.querySelectorAll("[data-copy]")) {
