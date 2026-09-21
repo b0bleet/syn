@@ -17,9 +17,11 @@ RunPod console → Serverless → New Endpoint:
 
 - **Image**: `<dockerhub-user>/syn-scorer`
 - **GPU**: 24 GB is enough for `Qwen/Qwen3-8B` in bfloat16. 48 GB for 14B, 80 GB for 32B.
-- **Network volume** (recommended): attach one: `HF_HOME=/runpod-volume/hf` caches the
-  weights so only the first worker ever downloads them. Without it every cold start
-  re-downloads ~16 GB, which RunPod's bandwidth still does in about a minute.
+- **Model** (Manage → Edit Endpoint): set it to the same value as `SYN_MODEL`, e.g.
+  `Qwen/Qwen3-8B`. RunPod then caches the weights on the host at
+  `/runpod-volume/huggingface-cache`, which is the image's `HF_HOME`, so workers load
+  from disk instead of downloading ~16 GB on every cold start. Free, and download time
+  is not billed. A network volume works too but is slower to read.
 - **Env vars**: `SYN_MODEL` (default `Qwen/Qwen3-8B`), `SYN_READOUT` (`letters`),
   `SYN_REVISION` to pin a commit. The SGLang-side settings are unused here.
 
@@ -41,7 +43,11 @@ or the URL shorthand:
 ```
 
 `output.selected_option_id` is the answer; the full `ScoreResponse` (probabilities, wins,
-agreement, latency) comes back verbatim. Bad payloads return `{"error": ...}`.
+agreement, latency) comes back verbatim. A bad payload fails the job with the reason in `error`.
+
+The public API is the Cloudflare Worker in `deploy/cloudflare/`, which sends
+`{"input": {"http": {"method", "path", "headers", "body"}}}`; the handler replays that request
+against the same FastAPI app `syn serve` runs and returns `{"status", "headers", "body"}`.
 
 ## Notes
 

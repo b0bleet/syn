@@ -17,7 +17,11 @@ local = ["torch>=2.6,<3", "numpy>=1.26,<3", "safetensors>=0.4,<1"]
 hub = ["datasets>=3,<5"]
 
 [dependency-groups]
-dev = ["pytest>=8,<10", "ruff>=0.11,<1"]
+dev = [
+    "pytest>=8,<10",
+    "ruff>=0.11,<1",
+    "typesafe-sdk>=0.7.0",
+]
 
 [project.scripts]
 syn = "syn.cli:main"

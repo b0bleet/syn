@@ -44,6 +44,7 @@ def test_cli_compare(monkeypatch, capsys):
 
 
 def test_cli_training_commands(monkeypatch, capsys):
+    pytest.importorskip("torch")  # syn.features and syn.training import it
     seen = {}
     monkeypatch.setattr(
         "syn.synthetic.generate",

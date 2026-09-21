@@ -70,6 +70,9 @@ class Scorer:
             return self._score_head(request, started)
         return self._score_letters(request, started)
 
+    def close(self):
+        self.backend.close()
+
     def _score_letters(self, request: ScoreRequest, started: float) -> ScoreResponse:
         count = len(request.options)
         orderings = cyclic_orderings(count, self.settings.orderings)

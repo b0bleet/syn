@@ -5,6 +5,9 @@ __pycache__/
 .ruff_cache/
 .cache/
 .env
+node_modules/
+.wrangler/
+.dev.vars
 runs/
 logs/
 data/

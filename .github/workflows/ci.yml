@@ -1,0 +1,138 @@
+# Tests on every push and pull request. On main, after the tests pass, deploys what changed:
+#   src/, deploy/runpod/, pyproject.toml, uv.lock -> a GitHub release, which RunPod rebuilds from
+#   deploy/cloudflare/                            -> wrangler deploy of the Worker
+#
+# Deploys are off until enabled per repository, so forks never try to deploy:
+#   repository variables  DEPLOY_GPU=true, DEPLOY_WORKER=true
+#   secrets (Worker only) CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID
+# Pull requests, including from forks, only run tests with a read-only token and no secrets.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: Deploy regardless of which files changed
+        type: choice
+        options: [none, gpu, worker, both]
+        default: none
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      # CPU-only torch at the locked version; the default Linux wheel pulls ~2.5 GB of CUDA.
+      - run: |
+          torch=$(awk '/^name = "torch"$/{getline; print; exit}' uv.lock | sed -E 's/version = "(.*)"/\1/')
+          uv pip install "torch==$torch" numpy safetensors \
+            --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple
+      - run: uv run --no-sync ruff check src tests deploy
+      - run: uv run --no-sync ruff format --check src tests deploy
+      - run: uv run --no-sync pytest -q
+
+  worker:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: deploy/cloudflare
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: deploy/cloudflare/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run check
+
+  changes:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      gpu: ${{ steps.diff.outputs.gpu }}
+      worker: ${{ steps.diff.outputs.worker }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: diff
+        env:
+          BEFORE: ${{ github.event.before }}
+          DEPLOY: ${{ inputs.deploy }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            [[ "$DEPLOY" == gpu || "$DEPLOY" == both ]] && gpu=true || gpu=false
+            [[ "$DEPLOY" == worker || "$DEPLOY" == both ]] && worker=true || worker=false
+          elif git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            # Documentation alone never needs a rebuild.
+            files=$(git diff --name-only "$BEFORE" "$GITHUB_SHA" | grep -vE '\.md$' || true)
+            grep -qE '^(src/|deploy/runpod/|pyproject\.toml$|uv\.lock$)' <<<"$files" && gpu=true || gpu=false
+            grep -qE '^deploy/cloudflare/' <<<"$files" && worker=true || worker=false
+          else
+            # First push or rewritten history: nothing to diff against.
+            gpu=true
+            worker=true
+          fi
+          echo "gpu=$gpu" >> "$GITHUB_OUTPUT"
+          echo "worker=$worker" >> "$GITHUB_OUTPUT"
+
+  release-gpu:
+    needs: [python, changes]
+    if: github.ref == 'refs/heads/main' && vars.DEPLOY_GPU == 'true' && needs.changes.outputs.gpu == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          tag="deploy-$(date -u +%Y.%m.%d)-$GITHUB_RUN_NUMBER.$GITHUB_RUN_ATTEMPT"
+          gh release create "$tag" --target "$GITHUB_SHA" --title "Deploy $tag" --generate-notes
+
+  deploy-worker:
+    needs: [worker, changes]
+    if: github.ref == 'refs/heads/main' && vars.DEPLOY_WORKER == 'true' && needs.changes.outputs.worker == 'true'
+    runs-on: ubuntu-latest
+    environment: production
+    defaults:
+      run:
+        working-directory: deploy/cloudflare
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: deploy/cloudflare/package-lock.json
+      - run: npm ci
+      # Code only: the Worker's secrets were set once with `wrangler secret put` and persist.
+      - run: npx wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          WRANGLER_SEND_METRICS: "false"

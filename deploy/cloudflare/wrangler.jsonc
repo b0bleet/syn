@@ -1,0 +1,17 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "syn",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "observability": { "enabled": true },
+  "vars": {
+    // Free plan: at most 50 subrequests per request. 240 s at 5 s polls stays under that even
+    // when runsync itself waits about 90 s before handing back a queued job.
+    "JOB_TIMEOUT_SECONDS": "240",
+    "POLL_SECONDS": "5"
+  }
+  // Deployment-specific values are secrets, set once per account and never committed:
+  //   npx wrangler secret put RUNPOD_ENDPOINT_ID
+  //   npx wrangler secret put RUNPOD_API_KEY
+  //   npx wrangler secret put API_KEYS           (comma-separated keys your callers send)
+}

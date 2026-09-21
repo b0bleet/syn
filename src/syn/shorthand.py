@@ -1,9 +1,11 @@
 """GET shorthand: /<label,label,...>/<text> for one-line classification.
 
     GET /spam,not+spam/Win+a+free+iPhone
+    GET /?labels=spam,not+spam&text=Win+a+free+iPhone
 
-Labels are comma separated. `+` means a space and percent escapes are decoded, so a label
-or text containing a literal comma, plus, or slash is written `%2C`, `%2B`, `%2F`.
+Labels are comma separated. `+` means a space and percent escapes are decoded, so in the path
+form a label or text containing a literal comma, plus, or slash is written `%2C`, `%2B`, `%2F`.
+The query form decodes before splitting, so its labels cannot contain commas.
 """
 
 from urllib.parse import unquote_plus
@@ -47,8 +49,13 @@ def parse(path: str) -> tuple[list[str], str]:
     if head.split(",")[0].lower() in RESERVED:
         raise ShorthandError(f"{head!r} is a reserved path prefix, not a label list")
     # Split before decoding, so a percent-escaped comma stays inside its label.
-    labels = [unquote_plus(part).strip() for part in head.split(",")]
-    text = unquote_plus(tail).strip()
+    return check([unquote_plus(part) for part in head.split(",")], unquote_plus(tail))
+
+
+def check(labels: list[str], text: str) -> tuple[list[str], str]:
+    """Strip and validate decoded labels and text; shared by the path and query forms."""
+    labels = [label.strip() for label in labels]
+    text = text.strip()
     if any(not label for label in labels):
         raise ShorthandError("Every label must be non-empty")
     if not 2 <= len(labels) <= 26:
@@ -62,7 +69,7 @@ def parse(path: str) -> tuple[list[str], str]:
     if len(text) > MAX_TEXT_CHARS:
         raise ShorthandError(
             f"Text is {len(text)} characters; the URL form is limited to {MAX_TEXT_CHARS}. "
-            "Use POST /v1/score for longer states."
+            "Use POST / or POST /v1/score for longer texts."
         )
     return labels, text
 

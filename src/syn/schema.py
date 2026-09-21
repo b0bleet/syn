@@ -77,6 +77,47 @@ class ScoreResponse(StrictModel):
     backend_ms: float
 
 
+class ClassifyRequest(StrictModel):
+    """Body for POST /: one text or a batch, and the labels to pick from."""
+
+    input: (
+        Annotated[Text, Field(max_length=200_000)]
+        | Annotated[
+            list[Annotated[Text, Field(max_length=200_000)]], Field(min_length=1, max_length=32)
+        ]
+    )
+    labels: list[Annotated[Text, Field(max_length=128)]] = Field(min_length=2, max_length=26)
+    question: Annotated[str, Field(max_length=8192)] | None = None
+
+    @model_validator(mode="after")
+    def unique_labels(self):
+        if len(set(self.labels)) != len(self.labels):
+            raise ValueError("Labels must be unique")
+        return self
+
+
+class LabelResult(StrictModel):
+    # Null when the service abstained; abstain_reasons says why.
+    label: str | None
+    # Same meaning as ScoreResponse.confidence: best probability rescaled so chance is 0.
+    confidence: float = Field(ge=0, le=1)
+    # Probability per label, summing to 1.
+    scores: dict[str, float]
+    abstain_reasons: list[AbstainReason]
+    ms: float
+
+
+class ClassifyUsage(StrictModel):
+    classifications: int
+    ms: float
+
+
+class ClassifyResponse(StrictModel):
+    model: str
+    results: list[LabelResult]
+    usage: ClassifyUsage
+
+
 class EvalExample(StrictModel):
     request: ScoreRequest
     expected_option_id: str

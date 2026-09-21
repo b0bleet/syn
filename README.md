@@ -30,14 +30,17 @@ curl -sS http://127.0.0.1:8765/v1/score -H 'Content-Type: application/json' -d '
 }'
 ```
 
-GET shorthand for short texts (path is `/<label,label,...>/<text>`):
+URL shortcuts. GET answers with the bare label; `?verbose=1` returns `{model, results: [{label, confidence, scores, ms}], usage}`, `?format=json` the full response above:
 
 ```sh
-curl "http://127.0.0.1:8765/spam,ham/Win+a+free+iPhone?format=label"   # -> "spam"
+curl "http://127.0.0.1:8765/spam,ham/Win+a+free+iPhone"                  # -> spam
+curl "http://127.0.0.1:8765/?labels=spam,ham&text=Win+a+free+iPhone&verbose=1"
 curl "http://127.0.0.1:8765/billing,technical,sales/I+was+charged+twice?q=Which+team%3F"
+curl http://127.0.0.1:8765/ -H 'Content-Type: application/json' \
+  -d '{"input": ["Win a free iPhone", "Lunch at noon?"], "labels": ["spam", "ham"]}'   # batch of up to 32
 ```
 
-`+` means a space; percent-encode `%2C`, `%2B`, `%2F` inside labels. Interactive API docs at `/docs`, health at `/health`. A GET puts the classified text in the URL, which lands in access logs, so don't send personal data through it.
+`+` means a space; in the path form percent-encode `%2C`, `%2B`, `%2F` inside labels. Interactive API docs at `/docs`, health at `/health`. A GET puts the classified text in the URL, which lands in access logs, so don't send personal data through it.
 
 ## How it scores
 
@@ -86,7 +89,34 @@ python -m sglang.launch_server --model-path Qwen/Qwen3-8B --port 30000
 SYN_BACKEND=sglang SYN_MODEL=Qwen/Qwen3-8B uv run syn serve
 ```
 
-Startup refuses a remote running a different model or revision; `/health` probes it and returns 503 `degraded` when unreachable. RunPod image: `deploy/runpod/`.
+Startup refuses a remote running a different model or revision; `/health` probes it and returns 503 `degraded` when unreachable.
+
+## TypeSafe SDK
+
+`POST /v1/systemone` and `GET /v1/models` speak the [typesafe-sdk](https://pypi.org/project/typesafe-sdk/) protocol, so its clients work unchanged. Each question is scored as options: `Noul` is yes versus no (`noul` is P(yes)), `Choice` one option per criteria key, `Score` one option per rubric level (`score` is the probability-weighted level). Any `model` name is accepted.
+
+```python
+from typesafe_sdk import Choice, Noul, Score, TypeSafeClient
+
+client = TypeSafeClient(api_key="...", base_url="http://127.0.0.1:8765", model="syn-latest", timeout=120)
+response = client.system_one(
+    state="I was charged twice. Please fix this ASAP.",
+    questions={
+        "billing": Noul(instructions="Is this ticket about billing?"),
+        "tone": Choice(instructions="What is the customer's tone?", criteria={"calm": None, "angry": None}),
+        "urgency": Score(instructions="How urgent is this ticket?", criteria=["can wait", "this week", "today"]),
+    },
+)
+response.nouls["billing"].noul, response.choices["tone"].choice, response.scores["urgency"].score
+```
+
+The SDK's default timeout is 10 s; pass `timeout=120` when the GPU may be cold.
+
+## Public API
+
+A Cloudflare Worker (`deploy/cloudflare/`) is the public front door: it checks the caller's key, forwards the request as a RunPod job, polls through GPU cold starts, and returns what the same FastAPI app produced on the GPU (`deploy/runpod/`, scales to zero). The first request after scaling to zero waits for a worker (about a minute); warm requests take about half a second.
+
+CI (`.github/workflows/ci.yml`) tests every push and pull request. On `main` it deploys what changed: code under `src/` or `deploy/runpod/` becomes a GitHub release, which RunPod rebuilds from, and `deploy/cloudflare/` is redeployed with wrangler. Deploys stay off until the repository sets the variables `DEPLOY_GPU` / `DEPLOY_WORKER` to `true` (and the `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` secrets for the Worker), so forks never deploy.
 
 ## Configuration
 
@@ -102,11 +132,10 @@ Startup refuses a remote running a different model or revision; `/health` probes
 | `SYN_ORDERINGS` | `0` | Cyclic orderings per request; `0` = one per option |
 | `SYN_TEMPERATURE` | `1` | Option-distribution temperature |
 | `SYN_ABSTAIN_THRESHOLD` / `SYN_MIN_CONFIDENCE` / `SYN_MIN_ORDERING_AGREEMENT` | `0` | Abstention gates |
-| `SYN_API_KEY` | unset | Bearer token on `/v1/score` and the GET shorthand; `/health` stays open |
+| `SYN_API_KEY` | unset | Bearer token on every classification route; `/health` stays open |
 | `SYN_LOG_PATH` | unset | Optional JSONL decision log |
 | `SYN_SGLANG_URL` | `http://127.0.0.1:30000` | SGLang server URL |
-| `SYN_SGLANG_CHECK_MODEL` | `true` | Refuse to start if SGLang serves another model |
-| `SYN_MAX_PROMPT_TOKENS` | `8192` | Reject longer prompts; never truncate |
+| `SYN_SGLANG_CHECK_MODEL` | `true` | Refuse to start if SGLang serves another model || `SYN_MAX_PROMPT_TOKENS` | `8192` | Reject longer prompts; never truncate |
 | `SYN_LOCAL_BATCH_TOKENS` | `16384` | Token budget per batched local forward |
 
 ## Checks
@@ -115,4 +144,5 @@ Startup refuses a remote running a different model or revision; `/health` probes
 HF_HOME=.cache/huggingface uv run --extra local pytest -q
 uv run ruff check src tests
 uv run ruff format --check src tests
+cd deploy/cloudflare && npm ci && npm test && npm run check
 ```
