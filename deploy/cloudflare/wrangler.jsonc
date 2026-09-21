@@ -4,7 +4,17 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-09-01",
   "observability": { "enabled": true },
+  // The page in public/. The Worker runs first so `/` can serve the page to browsers and the
+  // API to everything else; it hands page requests to ASSETS.
+  "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": true },
+  "durable_objects": { "bindings": [{ "name": "QUOTA", "class_name": "Quota" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Quota"] }],
   "vars": {
+    // Free tier, in units per UTC day (one per request, or per text in a batch). The page in
+    // public/index.html states DAILY_LIMIT; keep them in step. GLOBAL_DAILY_LIMIT bounds GPU
+    // spend: at about half a GPU-second per unit, 20000 is roughly 3 GPU-hours a day.
+    "DAILY_LIMIT": "1000",
+    "GLOBAL_DAILY_LIMIT": "20000",
     // Free plan: at most 50 subrequests per request. 240 s at 5 s polls stays under that even
     // when runsync itself waits about 90 s before handing back a queued job.
     "JOB_TIMEOUT_SECONDS": "240",
@@ -13,5 +23,5 @@
   // Deployment-specific values are secrets, set once per account and never committed:
   //   npx wrangler secret put RUNPOD_ENDPOINT_ID
   //   npx wrangler secret put RUNPOD_API_KEY
-  //   npx wrangler secret put API_KEYS           (comma-separated keys your callers send)
+  //   npx wrangler secret put API_KEYS           (optional: comma-separated keys with no limits)
 }

@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sifty: classify anything with one URL</title>
+<meta name="description" content="Free zero-shot text classification API. Send text and labels, get a label back. No training, no prompts, no key.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230f766e'/%3E%3Cpath d='M7 10h18M10 16h12M13 22h6' stroke='white' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #fbfaf8; --fg: #1c1917; --muted: #6b645e; --line: #e7e3de; --card: #ffffff;
+    --accent: #0f766e; --accent-soft: #ccfbf1; --code: #f4f1ed; --bar: #d6d3d1; --warn: #b45309;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #11100f; --fg: #f5f5f4; --muted: #a8a29e; --line: #2c2927; --card: #1a1817;
+      --accent: #2dd4bf; --accent-soft: #134e4a; --code: #211f1d; --bar: #3a3634; --warn: #fbbf24;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 16px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  a { color: var(--accent); text-underline-offset: 3px; }
+  code, pre, textarea, input { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 0 24px; }
+  header { border-bottom: 1px solid var(--line); }
+  header .wrap { display: flex; align-items: center; justify-content: space-between; height: 64px; }
+  .logo { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 20px; color: var(--fg); text-decoration: none; letter-spacing: -0.02em; }
+  nav { display: flex; gap: 20px; font-size: 14px; }
+  nav a { color: var(--muted); text-decoration: none; }
+  nav a:hover { color: var(--fg); }
+  section { padding: 56px 0; border-bottom: 1px solid var(--line); }
+  h1 { font-size: clamp(34px, 6vw, 54px); line-height: 1.08; letter-spacing: -0.035em; margin: 0 0 20px; }
+  h2 { font-size: 26px; letter-spacing: -0.02em; margin: 0 0 8px; }
+  h3 { font-size: 16px; margin: 0 0 6px; }
+  .lede { font-size: 19px; color: var(--muted); max-width: 640px; margin: 0 0 28px; }
+  .sub { color: var(--muted); margin: 0 0 24px; }
+  .badge { display: inline-block; background: var(--accent-soft); color: var(--accent); font-size: 13px; font-weight: 600; padding: 3px 10px; border-radius: 99px; margin-bottom: 18px; }
+  pre { background: var(--code); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; overflow-x: auto; margin: 0; font-size: 14px; line-height: 1.55; }
+  .block { position: relative; margin: 12px 0 20px; }
+  .copy { position: absolute; top: 8px; right: 8px; font: 12px ui-sans-serif, system-ui, sans-serif; background: var(--card); color: var(--muted); border: 1px solid var(--line); border-radius: 6px; padding: 3px 8px; cursor: pointer; }
+  .copy:hover { color: var(--fg); }
+  .out { color: var(--accent); }
+  .panel { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 22px; }
+  label { display: block; font-size: 13px; font-weight: 600; color: var(--muted); margin: 0 0 6px; }
+  textarea, input { width: 100%; font-size: 15px; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+  textarea { min-height: 92px; resize: vertical; }
+  textarea:focus, input:focus, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .field { margin-bottom: 16px; }
+  .examples { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 18px; }
+  .chip { font-size: 13px; background: transparent; color: var(--fg); border: 1px solid var(--line); border-radius: 99px; padding: 5px 12px; cursor: pointer; }
+  .chip:hover { border-color: var(--accent); color: var(--accent); }
+  .actions { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .go { font-size: 15px; font-weight: 600; background: var(--accent); color: var(--bg); border: 0; border-radius: 10px; padding: 11px 22px; cursor: pointer; }
+  .go:disabled { opacity: .55; cursor: progress; }
+  .quota { font-size: 13px; color: var(--muted); }
+  .result { margin-top: 22px; min-height: 24px; }
+  .answer { font-size: 30px; font-weight: 700; letter-spacing: -0.02em; margin: 0 0 4px; }
+  .meta { font-size: 13px; color: var(--muted); margin: 0 0 16px; }
+  .row { display: grid; grid-template-columns: minmax(80px, 180px) 1fr 52px; align-items: center; gap: 12px; font-size: 14px; margin: 7px 0; }
+  .row .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .track { height: 10px; background: var(--bar); border-radius: 99px; overflow: hidden; }
+  .fill { height: 100%; background: var(--accent); border-radius: 99px; transition: width .5s ease; }
+  .pct { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+  .status { font-size: 14px; color: var(--muted); }
+  .error { font-size: 14px; color: var(--warn); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 16px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 18px 20px; }
+  .card p { margin: 0; color: var(--muted); font-size: 15px; }
+  table { width: 100%; border-collapse: collapse; font-size: 15px; }
+  td { padding: 10px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+  td:first-child { color: var(--muted); width: 38%; padding-right: 16px; }
+  footer { padding: 36px 0 56px; color: var(--muted); font-size: 14px; }
+  @media (max-width: 560px) { nav a:not(.gh) { display: none; } section { padding: 40px 0; } }
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <a class="logo" href="/">
+      <svg width="26" height="26" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="currentColor" opacity=".12"/><path d="M7 10h18M10 16h12M13 22h6" stroke="#0f766e" stroke-width="3" stroke-linecap="round"/></svg>
+      sifty
+    </a>
+    <nav>
+      <a href="#try">Try it</a>
+      <a href="#api">API</a>
+      <a href="#sdk">SDK</a>
+      <a href="#limits">Limits</a>
+      <a class="gh" href="https://github.com/b0bleet/syn">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <section>
+    <div class="wrap">
+      <span class="badge">Free · no key · open source</span>
+      <h1>Classify anything<br>with one URL.</h1>
+      <p class="lede">Give sifty some text and a few labels; it answers with the label a language model finds most likely. No training, no prompt engineering, no account.</p>
+      <div class="block">
+        <pre><code>$ curl <span class="origin">https://sifty.dev</span>/spam,not+spam/Win+a+free+iPhone
+<span class="out">spam</span></code></pre>
+        <button class="copy" data-copy>Copy</button>
+      </div>
+    </div>
+  </section>
+
+  <section id="try">
+    <div class="wrap">
+      <h2>Try it</h2>
+      <p class="sub">Pick an example or write your own. Labels can be anything, in any language.</p>
+      <div class="panel">
+        <div class="examples" id="examples"></div>
+        <div class="field">
+          <label for="text">Text</label>
+          <textarea id="text" spellcheck="false">Congratulations! You have won a free iPhone. Click the link to claim your prize.</textarea>
+        </div>
+        <div class="field">
+          <label for="labels">Labels, comma-separated</label>
+          <input id="labels" value="spam, not spam" spellcheck="false">
+        </div>
+        <div class="actions">
+          <button class="go" id="go">Classify</button>
+          <span class="quota" id="quota"></span>
+        </div>
+        <div class="result" id="result" aria-live="polite"></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="api">
+    <div class="wrap">
+      <h2>Use it from anywhere</h2>
+      <p class="sub">Plain HTTP, no key needed. A GET answers with the bare label; add <code>?verbose=1</code> for probabilities.</p>
+      <div class="block">
+        <pre><code># labels, then text; + is a space
+curl <span class="origin">https://sifty.dev</span>/positive,negative,neutral/The+battery+died+after+two+days
+
+# the same as query parameters, with every label's probability
+curl "<span class="origin">https://sifty.dev</span>/?labels=billing,technical,sales&amp;text=I+was+charged+twice&amp;verbose=1"
+
+# up to 32 texts in one request
+curl <span class="origin">https://sifty.dev</span>/ -H 'Content-Type: application/json' \
+  -d '{"input": ["Win a free iPhone", "Lunch at noon?"], "labels": ["spam", "not spam"]}'</code></pre>
+        <button class="copy" data-copy>Copy</button>
+      </div>
+      <p class="sub">Verbose and POST responses look like this:</p>
+      <pre><code>{"model": "Qwen/Qwen3-8B",
+ "results": [{"label": "spam", "confidence": 0.99,
+              "scores": {"spam": 0.995, "not spam": 0.005}, "abstain_reasons": [], "ms": 420}],
+ "usage": {"classifications": 1, "ms": 431}}</code></pre>
+    </div>
+  </section>
+
+  <section id="sdk">
+    <div class="wrap">
+      <h2>Yes/no, choices, and scores</h2>
+      <p class="sub">sifty speaks the <a href="https://pypi.org/project/typesafe-sdk/">typesafe-sdk</a> protocol, so its Python client works unchanged. Ask several typed questions about one piece of text in a single call. Any key works on the free tier.</p>
+      <div class="block">
+        <pre><code>from typesafe_sdk import Choice, Noul, Score, TypeSafeClient
+
+client = TypeSafeClient(api_key="free", base_url="<span class="origin">https://sifty.dev</span>", timeout=120)
+response = client.system_one(
+    state="I was charged twice. Please fix this ASAP.",
+    questions={
+        "billing": Noul(instructions="Is this ticket about billing?"),
+        "tone": Choice(instructions="What is the customer's tone?",
+                       criteria={"calm": None, "frustrated": None, "angry": None}),
+        "urgency": Score(instructions="How urgent is this ticket?",
+                         criteria=["can wait", "this week", "today"]),
+    },
+)
+response.nouls["billing"].noul      # probability of yes
+response.choices["tone"].choice     # most likely label
+response.scores["urgency"].score    # expected level, 0 to 2</code></pre>
+        <button class="copy" data-copy>Copy</button>
+      </div>
+    </div>
+  </section>
+
+  <section id="how">
+    <div class="wrap">
+      <h2>How it works</h2>
+      <p class="sub">No text is generated. The answer comes from the model's own probabilities.</p>
+      <div class="grid">
+        <div class="card"><h3>Reads probabilities</h3><p>Your labels become lettered options, and the model's next-token probabilities for those letters become the scores.</p></div>
+        <div class="card"><h3>Cancels position bias</h3><p>Every label is scored in every position and the results are averaged. When the orderings disagree, the answer says so.</p></div>
+        <div class="card"><h3>A real model on a GPU</h3><p>Qwen3-8B, woken on demand. After a quiet spell the first request takes up to a minute; after that, about half a second.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="limits">
+    <div class="wrap">
+      <h2>Limits</h2>
+      <p class="sub">Free for everyone, with a daily allowance per IP address so it stays that way.</p>
+      <table>
+        <tr><td>Daily allowance</td><td>1,000 units per IP address, reset at 00:00 UTC</td></tr>
+        <tr><td>What a unit is</td><td>One request; a batch counts each text, a System One call each question</td></tr>
+        <tr><td>Where you stand</td><td><code>X-RateLimit-Remaining</code> on every response; <code>429</code> with <code>Retry-After</code> once it is used up</td></tr>
+        <tr><td>Per request</td><td>2 to 26 labels; up to 32 texts per batch; URLs up to 4,000 characters of text</td></tr>
+        <tr><td>Need more?</td><td>sifty is <a href="https://github.com/b0bleet/syn">open source</a>. Run it on your own GPU without limits.</td></tr>
+      </table>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    Requests pass through Cloudflare and RunPod, whose logs may record them, so please don't send personal or sensitive data.
+    Answers are model predictions, not guarantees; check them on your own examples.
+  </div>
+</footer>
+
+<script>
+  const EXAMPLES = [
+    ["Spam", "Congratulations! You have won a free iPhone. Click the link to claim your prize.", "spam, not spam"],
+    ["Sentiment", "The battery died after two days and support never replied.", "positive, negative, neutral"],
+    ["Support routing", "I was charged twice for my subscription this month.", "billing, technical issue, account access, feature request"],
+    ["Urgency", "The production database is down and customers cannot log in.", "urgent, can wait"],
+    ["News topic", "Apple unveils a new chip that doubles laptop battery life.", "world, sports, business, science and technology"],
+  ];
+  const $ = (id) => document.getElementById(id);
+  const text = $("text"), labels = $("labels"), go = $("go"), result = $("result"), quota = $("quota");
+
+  for (const el of document.querySelectorAll(".origin")) el.textContent = location.origin;
+  for (const [name, t, l] of EXAMPLES) {
+    const chip = document.createElement("button");
+    chip.className = "chip";
+    chip.textContent = name;
+    chip.onclick = () => { text.value = t; labels.value = l; classify(); };
+    $("examples").append(chip);
+  }
+  for (const button of document.querySelectorAll("[data-copy]")) {
+    button.onclick = async () => {
+      await navigator.clipboard.writeText(button.previousElementSibling.innerText.replace(/^\$ /gm, ""));
+      button.textContent = "Copied";
+      setTimeout(() => (button.textContent = "Copy"), 1500);
+    };
+  }
+
+  function show(className, message) {
+    result.replaceChildren(Object.assign(document.createElement("p"), { className, textContent: message }));
+  }
+
+  function showQuota(response) {
+    const left = response.headers.get("X-RateLimit-Remaining");
+    const limit = response.headers.get("X-RateLimit-Limit");
+    if (left !== null) quota.textContent = `${Number(left).toLocaleString()} of ${Number(limit).toLocaleString()} free requests left today`;
+  }
+
+  async function classify() {
+    const list = labels.value.split(",").map((s) => s.trim()).filter(Boolean);
+    if (!text.value.trim()) return show("error", "Write some text to classify.");
+    if (list.length < 2) return show("error", "Give at least two labels, separated by commas.");
+    go.disabled = true;
+    show("status", "Scoring…");
+    const slow = setTimeout(() => show("status", "Waking a GPU. After a quiet spell the first request takes up to a minute; the next ones take about half a second."), 2500);
+    const started = performance.now();
+    try {
+      const response = await fetch("/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ input: text.value, labels: list }),
+      });
+      showQuota(response);
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const detail = Array.isArray(body.detail) ? body.detail.map((d) => d.msg).join("; ") : body.detail;
+        return show("error", detail || `The request failed (${response.status}).`);
+      }
+      render(body.results[0], performance.now() - started);
+    } catch {
+      show("error", "Could not reach the API. Check your connection and try again.");
+    } finally {
+      clearTimeout(slow);
+      go.disabled = false;
+    }
+  }
+
+  function render(r, ms) {
+    const answer = document.createElement("p");
+    answer.className = "answer";
+    answer.textContent = r.label ?? "No clear answer";
+    const meta = document.createElement("p");
+    meta.className = "meta";
+    meta.textContent = `confidence ${r.confidence.toFixed(2)} · ${Math.round(ms).toLocaleString()} ms round trip`;
+    const rows = Object.entries(r.scores).sort((a, b) => b[1] - a[1]).map(([name, p]) => {
+      const row = document.createElement("div");
+      row.className = "row";
+      const label = Object.assign(document.createElement("span"), { className: "name", textContent: name, title: name });
+      const track = Object.assign(document.createElement("div"), { className: "track" });
+      const fill = Object.assign(document.createElement("div"), { className: "fill" });
+      fill.style.width = "0%";
+      track.append(fill);
+      const pct = Object.assign(document.createElement("span"), { className: "pct", textContent: `${(p * 100).toFixed(1)}%` });
+      row.append(label, track, pct);
+      requestAnimationFrame(() => (fill.style.width = `${p * 100}%`));
+      return row;
+    });
+    result.replaceChildren(answer, meta, ...rows);
+  }
+
+  go.onclick = classify;
+  text.addEventListener("keydown", (e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") classify(); });
+</script>
+</body>
+</html>
