@@ -45,6 +45,9 @@ agreement, latency) comes back verbatim. Bad payloads return `{"error": ...}`.
 
 ## Notes
 
+- GitHub import: set the Dockerfile path to `deploy/runpod/Dockerfile` and the build
+  context to the repo root. RunPod's scanner only looks for `runpod.serverless.start()`
+  at the repo root, so it warns about `deploy/runpod/handler.py`; continue anyway.
 - Cold start = image pull + model load + weight download. Keep at least one worker warm,
   or accept a few minutes on the first job.
 - `readout=head` needs `SYN_HEAD_PATH` pointing at a checkpoint inside the image or the
