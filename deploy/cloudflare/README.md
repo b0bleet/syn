@@ -40,10 +40,9 @@ and p95 latency), endpoints, sources and clients, countries, status codes, and G
 starts. Calling websites are recorded but not shown, since any script can claim any `Origin`.
 Each range is cached for ten minutes, which keeps it within the free plan's 10,000 queries a day
 however many people look. It reads the dataset through Cloudflare's SQL API, so the Worker needs
-two more secrets; the token stays in the Worker:
+one more secret; the account id lives in `wrangler.jsonc` and the token stays in the Worker:
 
 ```sh
-npx wrangler secret put STATS_ACCOUNT_ID   # Workers & Pages overview, right-hand column
 npx wrangler secret put STATS_API_TOKEN    # a token with only "Account Analytics: Read"
 ```
 

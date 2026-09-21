@@ -20,12 +20,13 @@
     // Free plan: at most 50 subrequests per request. 240 s at 5 s polls stays under that even
     // when runsync itself waits about 90 s before handing back a queued job.
     "JOB_TIMEOUT_SECONDS": "240",
-    "POLL_SECONDS": "5"
+    "POLL_SECONDS": "5",
+    // The Cloudflare account id /stats queries; not sensitive.
+    "STATS_ACCOUNT_ID": "cd1b34c2fe997744ebe40ae4c24d069b"
   }
   // Deployment-specific values are secrets, set once per account and never committed:
   //   npx wrangler secret put RUNPOD_ENDPOINT_ID
   //   npx wrangler secret put RUNPOD_API_KEY
   //   npx wrangler secret put API_KEYS           (optional: comma-separated keys with no limits)
-  //   npx wrangler secret put STATS_ACCOUNT_ID   (optional, for /stats: the Cloudflare account id)
   //   npx wrangler secret put STATS_API_TOKEN    (optional, for /stats: "Account Analytics: Read")
 }
