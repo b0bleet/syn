@@ -35,10 +35,12 @@ SYN_TRAIN_LR (5e-4), SYN_TRAIN_SEED (7), SYN_TRAIN_P_NONE (0.1), SYN_TRAIN_P_NON
 Pointer task: SYN_TRAIN_POINTER_RANK (16), SYN_TRAIN_POINTER_EPOCHS (2, or --epochs),
 SYN_TRAIN_POINTER_LR (5e-5), SYN_TRAIN_POINTER_BATCH (2), SYN_TRAIN_POINTER_ACCUMULATE (4),
 SYN_TRAIN_POINTER_MAX_TOKENS (1024), SYN_TRAIN_POINTER_CHECKPOINTING (1),
-SYN_TRAIN_ANCHOR (1), SYN_TRAIN_ANCHOR_WEIGHT (1), SYN_TRAIN_ANCHOR_ORDERINGS (1).
+SYN_TRAIN_ANCHOR (0), SYN_TRAIN_ANCHOR_WEIGHT (1), SYN_TRAIN_ANCHOR_ORDERINGS (1).
+The anchor is off because its teacher is the letters readout in the chat prompt, while the
+pointer learns a cloze prefix. Set SYN_TRAIN_ANCHOR=1 to turn that teacher on.
 Rows come from pointer-data/<source>/{train,validation,calibration}.jsonl, not from data/.
-test.jsonl beside those splits is scored and not trained on. Before training, the base
-model's letters readout writes an anchor file and the pointer loss stays near it.
+test.jsonl beside those splits is scored and not trained on. With SYN_TRAIN_ANCHOR=1 the
+base model's letters readout writes an anchor file and the pointer loss stays near it.
 Serve with SYN_MODEL=hf://<repo>/pointers/<model>/<run>/backbone and
 SYN_POINTER_PATH=hf://<repo>/pointers/<model>/<run>/pointer.safetensors.
 
@@ -304,7 +306,7 @@ def write_anchors(train_files: list[Path], out: Path, limit_per_source: int, log
     Returns None when anchoring is off or no row could be scored. The model is dropped
     before the caller loads it again for training.
     """
-    if setting("ANCHOR", "1") == "0":
+    if setting("ANCHOR", "0") == "0":
         log("anchors off")
         return None
     import gc

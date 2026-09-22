@@ -90,8 +90,8 @@ uv run python scripts/runpod_train.py --model Qwen/Qwen3-8B --hf-repo <user>/syn
   `pointer-data/transfer-dev.jsonl` and each source's `test.jsonl`, and pushes the merged
   backbone plus `pointer.safetensors` to `pointers/<model>/<run>/`. `--epochs` applies
   here too (default 2). Adapter rank 16, batch 2 with 4 accumulation steps, and gradient
-  checkpointing. Before training, the base model's letters readout scores the training
-  rows once and that distribution anchors the pointer loss (`SYN_TRAIN_ANCHOR=0` skips it).
+  checkpointing. The anchor is off: its teacher is the letters readout in the chat prompt,
+  while the pointer learns a cloze prefix. `SYN_TRAIN_ANCHOR=1` turns that teacher on.
   Serve from the store with
   `SYN_MODEL=hf://<user>/<repo>/pointers/<model>/<run>/backbone`,
   `SYN_READOUT=pointer`, and

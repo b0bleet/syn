@@ -72,6 +72,7 @@ def build_request(args: argparse.Namespace) -> dict:
     }
     if args.task == "pointer":
         env["SYN_TRAIN_POINTER_EPOCHS"] = str(2 if args.epochs is None else args.epochs)
+        env["SYN_TRAIN_ANCHOR"] = "0"
     if args.revision:
         env["SYN_REVISION"] = args.revision
     if args.sources:
