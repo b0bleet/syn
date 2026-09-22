@@ -12,13 +12,51 @@ from test_local_backend import save_tiny_qwen3
 
 from syn.backends import LocalBackend, PointerResult, pointer_layout, pointer_mask
 from syn.config import Settings
-from syn.pointer import PointerHead, PointerReadout, augment_options, delimiter_ids
+from syn.pointer import (
+    PointerHead,
+    PointerReadout,
+    augment_options,
+    delimiter_ids,
+    hold_out_selection,
+    source_weights,
+)
 from syn.prompt import PromptBuilder
-from syn.schema import Option, ScoreRequest
+from syn.schema import EvalExample, Option, ScoreRequest
 from syn.scoring import Scorer
 from syn.training import Augment
 
 DELIMS = (30, 31, 29)
+
+
+def _row(source: str, label: str = "yes") -> EvalExample:
+    return EvalExample(
+        request=ScoreRequest(
+            context="c",
+            question="q",
+            options=[Option(id="yes", text="Yes"), Option(id="no", text="No")],
+        ),
+        expected_option_id=label,
+        source=source,
+    )
+
+
+def test_source_weights_give_each_source_the_same_total():
+    rows = [_row("big")] * 4 + [_row("small")]
+    weights = source_weights(rows)
+    assert abs(sum(weights) / len(weights) - 1) < 1e-9
+    big = sum(weights[:4])
+    small = weights[4]
+    assert abs(big - small) < 1e-9
+    assert small > weights[0]
+
+
+def test_hold_out_selection_removes_one_source_from_training():
+    train = [_row("a")] * 2 + [_row("b")] * 4 + [_row("c")] * 6
+    validation = [_row("a"), _row("b"), _row("c")]
+    kept, select, source = hold_out_selection(train, validation, seed=0)
+    assert source == "a"
+    assert {row.source for row in kept} == {"b", "c"}
+    assert {row.source for row in select} == {"a"}
 
 
 def test_pointer_layout_and_mask():

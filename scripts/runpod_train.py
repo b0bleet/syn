@@ -72,7 +72,9 @@ def build_request(args: argparse.Namespace) -> dict:
     }
     if args.task == "pointer":
         env["SYN_TRAIN_POINTER_EPOCHS"] = str(2 if args.epochs is None else args.epochs)
-        env["SYN_TRAIN_ANCHOR"] = "0"
+        env["SYN_TRAIN_ANCHOR"] = "1" if args.anchor else "0"
+        env["SYN_TRAIN_BALANCE_SOURCES"] = "1"
+        env["SYN_TRAIN_HOLDOUT_SELECTION"] = "1"
     if args.revision:
         env["SYN_REVISION"] = args.revision
     if args.sources:
@@ -162,6 +164,11 @@ def main(argv: list[str] | None = None) -> None:
         default="head",
         help="head caches frozen features and trains the general head; "
         "pointer adapts the backbone on pointer-data/ and trains the pointer head",
+    )
+    parser.add_argument(
+        "--anchor",
+        action="store_true",
+        help="For --task pointer, anchor training to the base model's letters readout",
     )
     parser.add_argument("--revision", help="Pin the backbone to a commit (SYN_REVISION)")
     parser.add_argument("--gpu", default="NVIDIA L40S", help="RunPod GPU type id")

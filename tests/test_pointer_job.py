@@ -55,6 +55,7 @@ def _args(**overrides):
         "min_ram": 48,
         "limit_per_source": 2000,
         "epochs": 8,
+        "anchor": False,
     }
     values.update(overrides)
     return Namespace(**values)
@@ -68,6 +69,12 @@ def test_launcher_marks_a_pointer_pod(monkeypatch):
     assert pointer["env"]["SYN_TRAIN_TASK"] == "pointer"
     assert pointer["env"]["SYN_TRAIN_POINTER_EPOCHS"] == "2"
     assert pointer["env"]["SYN_TRAIN_ANCHOR"] == "0"
+    assert pointer["env"]["SYN_TRAIN_BALANCE_SOURCES"] == "1"
+    assert pointer["env"]["SYN_TRAIN_HOLDOUT_SELECTION"] == "1"
+    anchored = runpod_train.build_request(
+        _args(task="pointer", hf_repo="jolobuild/syn-training", epochs=None, anchor=True)
+    )
+    assert anchored["env"]["SYN_TRAIN_ANCHOR"] == "1"
     assert "local,hub,train" in pointer["dockerStartCmd"][-1]
     assert (
         runpod_train.store_prefix("pointer", "jolobuild/syn-training", None)

@@ -231,6 +231,50 @@ def row_loss(
     return loss
 
 
+def source_weights(rows: list[EvalExample]) -> list[float]:
+    """Per-row weights that give every source the same total, with mean weight 1.
+
+    A source of 2,000 rows otherwise swamps one of 28. Repeating the small source would
+    memorize its few wordings, so the loss is scaled instead and every row is still seen.
+    """
+    counts: dict[str, int] = {}
+    for row in rows:
+        key = row.source or ""
+        counts[key] = counts.get(key, 0) + 1
+    raw = [1.0 / counts[row.source or ""] for row in rows]
+    scale = len(raw) / sum(raw)
+    return [weight * scale for weight in raw]
+
+
+def hold_out_selection(
+    train_rows: list[EvalExample], val_rows: list[EvalExample], seed: int
+) -> tuple[list[EvalExample], list[EvalExample], str | None]:
+    """Drop one source from training and select the checkpoint on its validation rows.
+
+    The source is the median-sized one that also appears in validation, so selection is not
+    the biggest template and not the locked transfer file.
+    """
+    counts: dict[str, int] = {}
+    for row in train_rows:
+        key = row.source or ""
+        counts[key] = counts.get(key, 0) + 1
+    val_sources = {row.source or "" for row in val_rows}
+    candidates = sorted(
+        (source for source in counts if source in val_sources), key=lambda s: (counts[s], s)
+    )
+    if len(candidates) < 2:
+        return train_rows, val_rows, None
+    # The middle of the size ranking, with the seed breaking a tie between the two center sources.
+    center = len(candidates) // 2
+    pair = candidates[center - 1 : center + 1]
+    source = pair[seed % len(pair)]
+    train = [row for row in train_rows if (row.source or "") != source]
+    select = [row for row in val_rows if (row.source or "") == source]
+    if not train or not select:
+        return train_rows, val_rows, None
+    return train, select, source
+
+
 def load_rows(paths, limit_per_source: int = 0) -> list[EvalExample]:
     """Labelled rows from one or more JSONL files, tagged with a source when they carry none."""
     if isinstance(paths, (str, Path)):
@@ -337,6 +381,8 @@ def train_pointer(
     anchor_weight: float = 0.0,
     max_tokens: int = 2048,
     limit_per_source: int = 0,
+    balance_sources: bool = False,
+    holdout_selection: bool = False,
     checkpointing: bool = False,
     settings=None,
     log=print,
@@ -375,6 +421,20 @@ def train_pointer(
     dtype = torch.bfloat16 if device == "cuda" else torch.float32
     train_rows = load_rows(train, limit_per_source)
     val_rows = load_rows(validation)
+    selection_source = None
+    if holdout_selection:
+        train_rows, selection_rows, selection_source = hold_out_selection(
+            train_rows, val_rows, seed
+        )
+        if selection_source is not None:
+            log(
+                f"checkpoint selection on held-out source {selection_source} ({len(selection_rows)} rows)"
+            )
+        else:
+            selection_rows = val_rows
+    else:
+        selection_rows = val_rows
+    row_weights = source_weights(train_rows) if balance_sources else [1.0] * len(train_rows)
     cal_rows = load_rows(calibration) if calibration else None
     test_rows = load_rows(test) if test else None
     indomain_rows = load_rows(indomain) if indomain else None
@@ -461,15 +521,22 @@ def train_pointer(
                 if len(encoded.ids) > max_tokens:
                     skipped += 1
                     continue
-                batch.append((encoded, anchors.get(_digest(example)) if anchors else None))
+                batch.append(
+                    (
+                        encoded,
+                        anchors.get(_digest(example)) if anchors else None,
+                        row_weights[index],
+                    )
+                )
             if not batch:
                 continue
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=device == "cuda"):
-                logits = batched_logits(decoder, head, [e for e, _ in batch], device, dtype)
-            loss = sum(
-                row_loss(z, encoded, ordinal_weight, teacher, anchor_weight)
-                for z, (encoded, teacher) in zip(logits, batch, strict=True)
-            ) / len(batch)
+                logits = batched_logits(decoder, head, [row[0] for row in batch], device, dtype)
+            losses = [
+                weight * row_loss(z, encoded, ordinal_weight, teacher, anchor_weight)
+                for z, (encoded, teacher, weight) in zip(logits, batch, strict=True)
+            ]
+            loss = sum(losses) / sum(row[2] for row in batch)
             if not torch.isfinite(loss):
                 raise ValueError(f"Non-finite training loss in epoch {epoch}; lower the rate")
             (loss / accumulate).backward()
@@ -480,12 +547,15 @@ def train_pointer(
                 step()
         if micro % accumulate:
             step()
-        val = evaluate(val_rows)
+        val = evaluate(selection_rows)
+        in_domain_val = evaluate(val_rows) if selection_source is not None else val
         record = {
             "epoch": epoch,
             "train_loss": total / max(count, 1),
             "rows_skipped": skipped,
             "val_top1": val["top1"],
+            "selection_source": selection_source,
+            "in_domain_val_top1": in_domain_val["top1"],
             "val_nll": val.get("negative_log_likelihood"),
             "val_ece": val.get("ece_10_bins"),
             "seconds": round(time.perf_counter() - started, 1),
@@ -565,6 +635,8 @@ def train_pointer(
             "anchor_weight": anchor_weight,
             "max_tokens": max_tokens,
             "sources": sources,
+            "selection_source": selection_source,
+            "balance_sources": balance_sources,
             "best_val_top1": best,
             "validation_at_temperature": {
                 "negative_log_likelihood": final.get("negative_log_likelihood"),
