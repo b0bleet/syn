@@ -3,7 +3,9 @@ import pytest
 from syn.backends import (
     LocalBackend,
     block_mask,
+    causal_text_config,
     isolation_layout,
+    require_local_readout,
     resolve_config,
     revision_commit,
 )
@@ -30,6 +32,35 @@ def save_tiny_qwen3(path):
     model = Qwen3ForCausalLM(config).eval()
     model.save_pretrained(path)
     return model
+
+
+def test_qwen35_text_config_keeps_the_commit_and_letters_only():
+    class Text:
+        model_type = "qwen3_5_text"
+        _commit_hash = None
+
+    class Wrapper:
+        model_type = "qwen3_5"
+        _commit_hash = "abc123"
+
+        def get_text_config(self):
+            return self.text
+
+        text = Text()
+
+    text = causal_text_config(Wrapper())
+    assert text.model_type == "qwen3_5_text"
+    assert revision_commit(text) == "abc123"
+    require_local_readout("qwen3_5_text", "letters")
+    require_local_readout("qwen3", "pointer")
+    with pytest.raises(ValueError, match="letters readout only"):
+        require_local_readout("qwen3_5_text", "pmi")
+    with pytest.raises(ValueError, match="not gemma"):
+        require_local_readout("gemma", "letters")
+
+
+def test_shipped_default_scores_one_option_order():
+    assert Settings().orderings == 1
 
 
 def test_local_backend_loads_and_matches_full_forward(tmp_path):

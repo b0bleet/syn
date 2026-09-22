@@ -132,6 +132,36 @@ def pointer_mask(seg: list[int], dtype, device):
     return mask.masked_fill(~allow, torch.finfo(dtype).min)[None, None]
 
 
+def causal_text_config(config):
+    """The text model Qwen3.5 actually scores with.
+
+    The Hub checkpoint is a multimodal wrapper (`qwen3_5`). Letter logits come from its text
+    config (`qwen3_5_text`). The commit pin lives on the wrapper, so it is copied across.
+    """
+    commit = revision_commit(config)
+    if getattr(config, "model_type", None) == "qwen3_5" and hasattr(config, "get_text_config"):
+        text = config.get_text_config()
+        if commit and not revision_commit(text):
+            text._commit_hash = commit
+        return text
+    return config
+
+
+def require_local_readout(model_type: str, readout: str) -> None:
+    """Qwen3.5 is letters-only. Its linear-attention layers ignore the 4D option mask."""
+    if model_type == "qwen3_5_text":
+        if readout != "letters":
+            raise ValueError(
+                "Qwen3.5 serves the letters readout only. "
+                "The pmi, head, and pointer readouts stay on Qwen3."
+            )
+        return
+    if model_type != "qwen3":
+        raise ValueError(
+            f"The local backend supports Qwen3 and Qwen3.5 text models, not {model_type}"
+        )
+
+
 def resolve_config(settings: Settings):
     """Fetch only the model config, so the checkpoint can be checked and pinned before weights load."""
     from transformers import AutoConfig
@@ -139,7 +169,38 @@ def resolve_config(settings: Settings):
     from .artifacts import pretrained_call
 
     model, extra = pretrained_call(settings.model, settings.revision)
-    return AutoConfig.from_pretrained(model, trust_remote_code=False, **extra)
+    config = AutoConfig.from_pretrained(model, trust_remote_code=False, **extra)
+    return causal_text_config(config)
+
+
+def _load_causal_lm(model: str, config, dtype, attn, extra):
+    from transformers import AutoModelForCausalLM
+
+    kwargs = dict(
+        config=config,
+        dtype=dtype,
+        trust_remote_code=False,
+        attn_implementation=attn,
+        **extra,
+    )
+    if getattr(config, "model_type", None) != "qwen3_5_text":
+        return AutoModelForCausalLM.from_pretrained(model, **kwargs)
+    try:
+        from transformers import Qwen3_5ForCausalLM
+    except ImportError as exc:
+        raise RuntimeError("Qwen3.5 needs transformers>=5.17") from exc
+    loaded, info = Qwen3_5ForCausalLM.from_pretrained(
+        model, output_loading_info=True, **kwargs
+    )
+    # Vision weights in the multimodal checkpoint are not part of the text model.
+    dropped = {
+        key: info.get(key)
+        for key in ("missing_keys", "mismatched_keys", "error_msgs")
+        if info.get(key)
+    }
+    if dropped:
+        raise RuntimeError(f"Qwen3.5 text weights did not load completely: {dropped}")
+    return loaded
 
 
 def revision_commit(config) -> str | None:
@@ -150,13 +211,11 @@ def revision_commit(config) -> str | None:
 class LocalBackend:
     def __init__(self, settings: Settings, config=None):
         import torch
-        from transformers import AutoModelForCausalLM
 
         from .artifacts import pretrained_call
 
-        config = config if config is not None else resolve_config(settings)
-        if config.model_type != "qwen3":
-            raise ValueError("The local backend currently supports Qwen3 causal LMs only")
+        config = causal_text_config(config if config is not None else resolve_config(settings))
+        require_local_readout(config.model_type, settings.readout)
         if settings.max_prompt_tokens >= config.max_position_embeddings:
             raise ValueError("max_prompt_tokens must leave room within the model context window")
         device = settings.device
@@ -180,18 +239,7 @@ class LocalBackend:
         if settings.readout in ("pmi", "pointer"):
             attn = "sdpa" if device == "cuda" else "eager"
         model, extra = pretrained_call(settings.model, settings.revision)
-        self.model = (
-            AutoModelForCausalLM.from_pretrained(
-                model,
-                config=config,
-                dtype=self.dtype,
-                trust_remote_code=False,
-                attn_implementation=attn,
-                **extra,
-            )
-            .to(device)
-            .eval()
-        )
+        self.model = _load_causal_lm(model, config, self.dtype, attn, extra).to(device).eval()
 
     def _chunks(self, prompts: list[PreparedPrompt]) -> list[list[int]]:
         """Group prompt indices so that rows x padded width stays within the token budget.

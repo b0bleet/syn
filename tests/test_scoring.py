@@ -44,7 +44,7 @@ def test_cyclic_orderings_cover_every_position():
 
 
 def test_content_scoring_all_orderings_agree(request_data, tmp_path):
-    settings = Settings(abstain_threshold=0.8, log_path=tmp_path / "decisions.jsonl")
+    settings = Settings(abstain_threshold=0.8, orderings=0, log_path=tmp_path / "decisions.jsonl")
     tokenizer = CharacterTokenizer()
     scorer = make_scorer(settings, billing_backend(tokenizer), tokenizer)
     response = scorer.score(ScoreRequest.model_validate(request_data))
@@ -71,7 +71,7 @@ def test_position_bias_is_averaged_out():
     assert single.best_option_id == "o0" and single.scores[0].probability == pytest.approx(0.9)
     assert single.ordering_agreement == 1.0 and not single.abstained
 
-    settings = Settings(min_ordering_agreement=0.5)
+    settings = Settings(orderings=0, min_ordering_agreement=0.5)
     averaged = make_scorer(settings, FixedBackend(row)).score(three_options())
     assert averaged.orderings_scored == 3
     assert [s.probability for s in averaged.scores] == pytest.approx([1 / 3] * 3)
@@ -135,7 +135,9 @@ class PositiveBackend(FixedBackend):
 
 @pytest.mark.parametrize("backend", [NanBackend(), ShortBackend(), PositiveBackend()])
 def test_backend_failure_is_not_a_decision(request_data, backend):
-    with TestClient(create_app(scorer=make_scorer(backend=backend))) as client:
+    # Two options, so the default single ordering would make ShortBackend's one row look valid.
+    scorer = make_scorer(Settings(orderings=0), backend)
+    with TestClient(create_app(scorer=scorer)) as client:
         assert client.post("/v1/score", json=request_data).status_code == 502
 
 

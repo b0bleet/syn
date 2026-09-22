@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     # auto = float32 on CPU, bfloat16 elsewhere. Qwen3 is trained in bfloat16; float16 can overflow.
     dtype: Literal["auto", "float32", "bfloat16", "float16"] = "auto"
     prompt_format: Literal["json", "text"] = "json"
-    # letters: read the option letter's next-token log-prob, averaged over cyclic orderings.
+    # letters: read the option letter's next-token log-prob. One ordering by default.
     # pmi: score each option's own text likelihood under a block-causal mask (all options in one
     # forward), minus the same likelihood with the context removed. Local backend only.
     # head: a trained AttentionHead over frozen backbone features (see `syn train-head`).
@@ -33,9 +33,9 @@ class Settings(BaseSettings):
     # leaks; measured on the smoke set it changed 2 of 3 answers under shuffling.
     pmi_list_options: bool = False
     max_prompt_tokens: int = Field(default=8192, ge=1, le=32767)
-    # Number of cyclic option orderings scored per request. 0 = one per option, so every option
-    # takes every position once. 1 = the caller's order only (position-biased, cheapest).
-    orderings: int = Field(default=0, ge=0, le=26)
+    # Number of cyclic option orderings scored per request. 1 = the caller's order only.
+    # 0 = one per option, so every option takes every position once.
+    orderings: int = Field(default=1, ge=0, le=26)
     temperature: float = Field(default=1.0, gt=0, le=100)
     abstain_threshold: float = Field(default=0.0, ge=0, le=1)
     min_confidence: float = Field(default=0.0, ge=0, le=1)

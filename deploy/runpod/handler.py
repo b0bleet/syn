@@ -3,7 +3,7 @@
 One GPU worker loads the model once at init and scores one request per job. This reuses the
 same Scorer the FastAPI service uses, so numbers measured locally carry over. Everything is
 configured through the SYN_* environment variables on the endpoint: SYN_MODEL picks the
-backbone (Qwen3-8B fits a 24 GB card in bfloat16), SYN_READOUT and SYN_HEAD_PATH select the
+backbone (Qwen3.5-4B fits a 24 GB card in bfloat16), SYN_READOUT and SYN_HEAD_PATH select the
 readout, and so on.
 
 Job input takes one of three forms:

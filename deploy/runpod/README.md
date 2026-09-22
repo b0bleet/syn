@@ -16,14 +16,15 @@ docker push <dockerhub-user>/syn-scorer
 RunPod console → Serverless → New Endpoint:
 
 - **Image**: `<dockerhub-user>/syn-scorer`
-- **GPU**: 24 GB is enough for `Qwen/Qwen3-8B` in bfloat16. 48 GB for 14B, 80 GB for 32B.
+- **GPU**: 24 GB is enough for `Qwen/Qwen3.5-4B` in bfloat16. 48 GB for 14B, 80 GB for 32B.
 - **Model** (Manage → Edit Endpoint): set it to the same value as `SYN_MODEL`, e.g.
-  `Qwen/Qwen3-8B`. RunPod then caches the weights on the host at
+  `Qwen/Qwen3.5-4B`. RunPod then caches the weights on the host at
   `/runpod-volume/huggingface-cache`, which is the image's `HF_HOME`, so workers load
   from disk instead of downloading ~16 GB on every cold start. Free, and download time
   is not billed. A network volume works too but is slower to read.
-- **Env vars**: `SYN_MODEL` (default `Qwen/Qwen3-8B`), `SYN_READOUT` (`letters`),
-  `SYN_REVISION` to pin a commit. The SGLang-side settings are unused here.
+- **Env vars**: `SYN_MODEL` (default `Qwen/Qwen3.5-4B`), `SYN_READOUT` (`letters`),
+  `SYN_ORDERINGS` (`1`, the caller's option order only), `SYN_REVISION` to pin a commit.
+  The SGLang-side settings are unused here. The pmi, head, and pointer readouts stay on Qwen3.
 
 ## Call it
 

@@ -415,7 +415,10 @@ def train_pointer(
     augment = augment or Augment()
     config = resolve_config(settings)
     if config.model_type != "qwen3":
-        raise ValueError("The pointer readout currently supports Qwen3 causal LMs only")
+        raise ValueError(
+            "The pointer readout supports Qwen3 only. Qwen3.5's linear-attention layers "
+            "ignore the option mask, so the pointer stays on Qwen3."
+        )
     from .artifacts import pretrained_call
 
     model_id, model_extra = pretrained_call(settings.model, settings.revision)

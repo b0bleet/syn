@@ -96,7 +96,7 @@ def test_get_shorthand_returns_the_decision(client):
     assert body["selected_option_id"] == "spam"
     assert [s["id"] for s in body["scores"]] == ["spam", "legit"]
     assert body["scores"][0]["probability"] == pytest.approx(0.75)
-    assert body["orderings_scored"] == 2
+    assert body["orderings_scored"] == 1
     assert body["prompt_version"] == "qwen-options-v1"
     assert result.headers["x-syn-selected"] == "spam"
     assert result.headers["x-syn-abstain-reasons"] == ""
