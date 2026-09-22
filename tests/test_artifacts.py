@@ -75,7 +75,9 @@ def test_pull_lists_fetched_files_and_tolerates_a_missing_repo(tmp_path, monkeyp
     def fake_snapshot(repo_id, allow_patterns, local_dir, revision, token):
         seen["args"] = (repo_id, allow_patterns, revision, token)
         if repo_id == "u/missing":
-            raise RepositoryNotFoundError("no", response=type("R", (), {"headers": {}, "request": None})())
+            raise RepositoryNotFoundError(
+                "no", response=type("R", (), {"headers": {}, "request": None})()
+            )
         for name in ("features/m/a-train.npz", "features/m/a-test.npz", "other/skip.txt"):
             if name.startswith(allow_patterns[0].rstrip("*")):
                 target = Path(local_dir) / name

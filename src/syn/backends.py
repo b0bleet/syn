@@ -189,9 +189,7 @@ def _load_causal_lm(model: str, config, dtype, attn, extra):
         from transformers import Qwen3_5ForCausalLM
     except ImportError as exc:
         raise RuntimeError("Qwen3.5 needs transformers>=5.17") from exc
-    loaded, info = Qwen3_5ForCausalLM.from_pretrained(
-        model, output_loading_info=True, **kwargs
-    )
+    loaded, info = Qwen3_5ForCausalLM.from_pretrained(model, output_loading_info=True, **kwargs)
     # Vision weights in the multimodal checkpoint are not part of the text model.
     dropped = {
         key: info.get(key)
