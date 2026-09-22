@@ -31,12 +31,7 @@ _MONTHS = {
         start=1,
     )
 }
-_MONTHS.update(
-    {
-        name[:3]: index
-        for name, index in _MONTHS.items()
-    }
-)
+_MONTHS.update({name[:3]: index for name, index in _MONTHS.items()})
 _ISO = re.compile(r"\b(\d{4})-(\d{2})-(\d{2})\b")
 _MDY = re.compile(
     r"\b(January|February|March|April|May|June|July|August|September|October|November|December|"
@@ -84,9 +79,7 @@ def date_facts(text: str) -> str:
             days = abs((found[later][2] - found[earlier][2]).days)
             relation = "before" if found[later][2] < found[earlier][2] else "after"
             unit = "day" if days == 1 else "days"
-            sentences.append(
-                f"{found[later][1]} is {days} {unit} {relation} {found[earlier][1]}."
-            )
+            sentences.append(f"{found[later][1]} is {days} {unit} {relation} {found[earlier][1]}.")
     return " ".join(sentences)
 
 
