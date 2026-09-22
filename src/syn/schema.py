@@ -124,6 +124,9 @@ class EvalExample(StrictModel):
     # The options are ordered levels, lowest first, as in a score question. Training then adds an
     # ordinal loss, and a benchmark sends the row as a score question rather than a choice.
     ordinal: bool = False
+    # Train a uniform distribution over the options. The expected id is the intact answer and is
+    # not the training target. Used when the case no longer contains the deciding fact.
+    uniform: bool = False
     # Where the row came from (a dataset or suite name). Metrics are reported per source, and a
     # transfer run holds one source out entirely.
     source: Annotated[str, Field(max_length=128)] | None = None

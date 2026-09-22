@@ -71,6 +71,7 @@ def test_launcher_marks_a_pointer_pod(monkeypatch):
     assert pointer["env"]["SYN_TRAIN_ANCHOR"] == "0"
     assert pointer["env"]["SYN_TRAIN_BALANCE_SOURCES"] == "1"
     assert pointer["env"]["SYN_TRAIN_HOLDOUT_SELECTION"] == "1"
+    assert pointer["env"]["SYN_TRAIN_POLICY_CASES"] == "1"
     anchored = runpod_train.build_request(
         _args(task="pointer", hf_repo="jolobuild/syn-training", epochs=None, anchor=True)
     )

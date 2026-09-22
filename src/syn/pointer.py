@@ -38,6 +38,7 @@ from safetensors.torch import load_file, save_file
 from torch import nn
 
 from .backends import pointer_layout, pointer_mask
+from .cases import extra_cases
 from .evaluation import read_jsonl
 from .features import DISTRACTOR_TEXTS, NONE_TEXTS, default_source
 from .head import file_sha256
@@ -135,6 +136,7 @@ class Encoded:
     # The option ids in order, or None when augmentation changed the set (no anchor then).
     option_ids: list[str] | None
     source: str
+    uniform: bool = False
 
 
 def augment_options(
@@ -166,7 +168,7 @@ def encode(
     options = list(request.options)
     label = [o.id for o in options].index(example.expected_option_id)
     changed = False
-    if augment is not None and augment.active and not example.ordinal:
+    if augment is not None and augment.active and not example.ordinal and not example.uniform:
         options, label, changed = augment_options(options, label, augment, rng or random.Random())
         if changed:
             request = request.model_copy(update={"options": options})
@@ -184,6 +186,7 @@ def encode(
         example.ordinal,
         None if changed else [o.id for o in options],
         example.source or "",
+        example.uniform,
     )
 
 
@@ -214,6 +217,9 @@ def row_loss(
     logits, row: Encoded, ordinal_weight: float, anchor: dict | None, anchor_weight: float
 ):
     logits = logits.float()
+    if row.uniform:
+        # The deciding fact is absent. Every option is an equally good answer.
+        return -logits.log_softmax(-1).mean()
     label = torch.tensor([row.label], device=logits.device)
     loss = nn.functional.cross_entropy(logits[None], label)
     if row.ordinal and ordinal_weight > 0:
@@ -383,6 +389,7 @@ def train_pointer(
     limit_per_source: int = 0,
     balance_sources: bool = False,
     holdout_selection: bool = False,
+    policy_cases: bool = False,
     checkpointing: bool = False,
     settings=None,
     log=print,
@@ -421,6 +428,11 @@ def train_pointer(
     dtype = torch.bfloat16 if device == "cuda" else torch.float32
     train_rows = load_rows(train, limit_per_source)
     val_rows = load_rows(validation)
+    if policy_cases:
+        added = extra_cases(train_rows)
+        if added:
+            log(f"policy cases: {len(added)} extra training rows")
+            train_rows = train_rows + added
     selection_source = None
     if holdout_selection:
         train_rows, selection_rows, selection_source = hold_out_selection(

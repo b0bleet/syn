@@ -75,6 +75,7 @@ def build_request(args: argparse.Namespace) -> dict:
         env["SYN_TRAIN_ANCHOR"] = "1" if args.anchor else "0"
         env["SYN_TRAIN_BALANCE_SOURCES"] = "1"
         env["SYN_TRAIN_HOLDOUT_SELECTION"] = "1"
+        env["SYN_TRAIN_POLICY_CASES"] = "1"
     if args.revision:
         env["SYN_REVISION"] = args.revision
     if args.sources:
