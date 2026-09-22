@@ -234,6 +234,23 @@ function parseUtc(value: string): number {
   return Date.parse(/Z|[+-]\d\d:?\d\d$/.test(iso) ? iso : `${iso}Z`);
 }
 
+/** Copper toward tide, one color per bar. Time is the only thing the color encodes. */
+function barInk(index: number, total: number): string {
+  const t = total <= 1 ? 0 : index / (total - 1);
+  return `hsl(${(22 + t * 146).toFixed(0)} 54% 42%)`;
+}
+
+function tipText(point: { t: number; n: number; hours: number }): string {
+  const date = new Date(point.t);
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const day = `${date.getUTCDate()} ${months[date.getUTCMonth()]}`;
+  const hour = String(date.getUTCHours()).padStart(2, "0");
+  const calls = `${count(point.n)} ${point.n === 1 ? "call" : "calls"}`;
+  if (point.hours === 24) return `${day} UTC · ${calls}`;
+  if (point.hours === 1) return `${day} ${hour}:00 UTC · ${calls}`;
+  return `${day} ${hour}:00 UTC, ${point.hours} hours · ${calls}`;
+}
+
 function stamp(t: number, withHour: boolean): string {
   const date = new Date(t);
   const month = String(date.getUTCMonth() + 1).padStart(2, "0");
@@ -256,15 +273,17 @@ function usageChart(title: string, points: { t: number; n: number; hours: number
   const padB = 22;
   const innerW = width - padL - padR;
   const innerH = height - padT - padB;
-  const gap = points.length > 48 ? 0 : 1;
-  const barW = Math.max(innerW / points.length - gap, 0.3);
+  const gap = points.length > 48 ? 0.4 : 1.5;
+  const slot = innerW / points.length;
+  const barW = Math.max(slot - gap, 0.3);
   const baseline = padT + innerH;
   const bars = points
     .map((point, i) => {
       const barH = (point.n / max) * innerH;
-      const x = padL + (i * innerW) / points.length;
+      const x = padL + i * slot + (slot - barW) / 2;
       const y = baseline - barH;
-      return `<rect x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${barW.toFixed(2)}" height="${barH.toFixed(2)}"/>`;
+      const tip = escape(tipText(point));
+      return `<g><rect class="mark" x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${barW.toFixed(2)}" height="${barH.toFixed(2)}" fill="${barInk(i, points.length)}"/><rect class="hit" data-tip="${tip}" x="${(padL + i * slot).toFixed(2)}" y="${padT}" width="${slot.toFixed(2)}" height="${innerH}"/></g>`;
     })
     .join("");
   const ticks = [0, Math.floor((points.length - 1) / 2), points.length - 1];
@@ -330,12 +349,14 @@ nav { display: flex; gap: 16px; font-size: 12px; }
 a { color: inherit; text-underline-offset: 3px; }
 .intro { font-size: 12px; margin: 12px 0 0; }
 h2 { font-size: 13px; font-weight: bold; margin: 32px 0 8px; }
-.chart { margin: 20px 0 0; }
-.chart figcaption { font-size: 12px; margin: 0 0 4px; }
+.chart { margin: 20px 0 0; background: #10241f; color: #f3ead7; padding: 14px 12px 6px; }
+.chart figcaption { font-size: 12px; margin: 0 0 6px; color: #f3ead7; }
 .chart svg { width: 100%; height: auto; display: block; }
-.chart rect { fill: #000; }
-.chart line { stroke: #000; }
-.chart text { font: 10px "Lucida Console", Monaco, monospace; fill: #000; }
+.chart .hit { fill: transparent; cursor: crosshair; }
+.chart g:hover .mark { fill: #f3ead7; }
+.chart line { stroke: #3d5c54; }
+.chart text { font: 10px "Lucida Console", Monaco, monospace; fill: #d5e4de; }
+#chart-tip { position: fixed; z-index: 2; pointer-events: none; background: #f3ead7; color: #10241f; border: 1px solid #10241f; padding: 4px 8px; font-size: 12px; white-space: nowrap; }
 .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 10px; }
 .tiles div { border: 1px solid #000; padding: 12px; font-size: 11px; }
 .tiles b { display: block; font-size: 22px; font-weight: normal; }
@@ -350,8 +371,23 @@ td.bar span { position: absolute; left: 0; top: 5px; bottom: 5px; background: #0
 <header><h1><a href="/">sifty</a> API statistics</h1><nav>${links}</nav></header>
 <p class="intro">Live usage of the free API: today's counts as they happen, tables every 10 minutes. Only counts are recorded: no text, labels, or IP addresses.</p>
 ${body}
-<footer style="font-size:10px;margin-top:32px">Contact <a href="mailto:emin@jolo.build">emin@jolo.build</a></footer>
+<footer style="font-size:10px;margin-top:32px"><a href="/contact.html">Contact us</a> at <a href="mailto:emin@jolo.build">emin@jolo.build</a></footer>
+<div id="chart-tip" hidden></div>
 <script>
+const tip = document.querySelector("#chart-tip");
+function placeTip(event) {
+  const hit = event.target.closest?.("[data-tip]");
+  if (!hit) { tip.hidden = true; return; }
+  tip.hidden = false;
+  tip.textContent = hit.getAttribute("data-tip");
+  const box = tip.getBoundingClientRect();
+  const x = Math.min(event.clientX + 14, window.innerWidth - box.width - 8);
+  const y = Math.max(8, event.clientY - box.height - 12);
+  tip.style.left = x + "px";
+  tip.style.top = y + "px";
+}
+document.addEventListener("pointermove", placeTip);
+document.addEventListener("pointerdown", placeTip);
 // Swap in fresh numbers every 30 s while the page is in view, for half an hour.
 let left = 60;
 const timer = setInterval(async () => {
@@ -360,7 +396,7 @@ const timer = setInterval(async () => {
   const response = await fetch(location.href, { cache: "no-cache" }).catch(() => null);
   if (!response?.ok) return;
   const next = new DOMParser().parseFromString(await response.text(), "text/html").querySelector("main");
-  if (next) document.querySelector("main").replaceWith(next);
+  if (next) { tip.hidden = true; document.querySelector("main").replaceWith(next); }
 }, 30000);
 </script>
 </body></html>`;

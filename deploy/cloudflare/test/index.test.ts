@@ -636,6 +636,8 @@ describe("public statistics page", () => {
     expect(html).toContain("Calls per day (UTC)");
     expect(html).toContain("Calls per hour (UTC)");
     expect(html).toContain('role="img"');
+    expect(html).toContain("data-tip=");
+    expect(html).toContain('id="chart-tip"');
     expect(html).toContain("<b>30 days</b>");
     expect(html).toContain("&#60;script&#62;");
     expect(html).not.toContain("<script>x");
