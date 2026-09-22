@@ -349,14 +349,14 @@ nav { display: flex; gap: 16px; font-size: 12px; }
 a { color: inherit; text-underline-offset: 3px; }
 .intro { font-size: 12px; margin: 12px 0 0; }
 h2 { font-size: 13px; font-weight: bold; margin: 32px 0 8px; }
-.chart { margin: 20px 0 0; background: #10241f; color: #f3ead7; padding: 14px 12px 6px; }
-.chart figcaption { font-size: 12px; margin: 0 0 6px; color: #f3ead7; }
+.chart { margin: 20px 0 0; }
+.chart figcaption { font-size: 12px; margin: 0 0 6px; }
 .chart svg { width: 100%; height: auto; display: block; }
 .chart .hit { fill: transparent; cursor: crosshair; }
-.chart g:hover .mark { fill: #f3ead7; }
-.chart line { stroke: #3d5c54; }
-.chart text { font: 10px "Lucida Console", Monaco, monospace; fill: #d5e4de; }
-#chart-tip { position: fixed; z-index: 2; pointer-events: none; background: #f3ead7; color: #10241f; border: 1px solid #10241f; padding: 4px 8px; font-size: 12px; white-space: nowrap; }
+.chart g:hover .mark { fill: #000; }
+.chart line { stroke: #000; }
+.chart text { font: 10px "Lucida Console", Monaco, monospace; fill: #000; }
+#chart-tip { position: fixed; z-index: 2; pointer-events: none; background: #fff; color: #000; border: 1px solid #000; padding: 4px 8px; font-size: 12px; white-space: nowrap; }
 .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 10px; }
 .tiles div { border: 1px solid #000; padding: 12px; font-size: 11px; }
 .tiles b { display: block; font-size: 22px; font-weight: normal; }
