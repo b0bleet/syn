@@ -2,7 +2,7 @@
 
 > Free zero-shot text classification API. Send text and 2-26 labels you choose; get back the most likely label, or a probability for every label. No training, no account, no API key.
 
-Qwen3-8B scores each label from next-token probabilities averaged across label orderings; it never generates text. Free tier: 1,000 units per IP per UTC day (a batch counts each text, a System One call each question), plus a shared daily cap. Over the limit answers 429 with Retry-After. The first request after a quiet spell can take up to a minute while a GPU wakes. Requests pass through Cloudflare and RunPod; do not send sensitive data.
+Qwen3.5-4B scores each label from next-token probabilities in one forward pass; it never generates text. Free tier: 1,000 units per IP per UTC day (a batch counts each text, a System One call each question), plus a shared daily cap. Over the limit answers 429 with Retry-After. The first request after a quiet spell can take up to a minute while a GPU wakes. Requests pass through Cloudflare and RunPod; do not send sensitive data.
 
 ## API
 

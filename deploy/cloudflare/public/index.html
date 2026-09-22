@@ -188,11 +188,11 @@ print(response.nouls["billing"].noul)</code></pre><button class="copy" data-copy
       <p>1,000 units per IP per day, reset at 00:00 UTC. A batch counts each text; a System One call counts each question. There is also a shared daily cap of 20,000 units.</p>
       <p>Use 2–26 labels, up to 32 texts per batch. The <code>X-RateLimit-Remaining</code> header tracks your allowance. A <code>429</code> response includes <code>Retry-After</code>.</p>
       <h2>How it works</h2>
-      <p>Qwen3-8B scores your labels using next-token probabilities, averaged across label orderings. It does not generate a text response. A cold GPU may take up to a minute to wake.</p>
+      <p>Qwen3.5-4B scores your labels using next-token probabilities in one forward pass. It does not generate a text response. A cold GPU may take up to a minute to wake.</p>
       <p class="docs-note">Requests pass through Cloudflare and RunPod, whose logs may record them. Please don’t send sensitive data.</p>
     </section>
   </main>
-  <footer><p>Powered by Qwen3-8B. Predictions can be wrong. Please don’t send sensitive data.</p></footer>
+  <footer><p>Powered by Qwen3.5-4B. Predictions can be wrong. Please don’t send sensitive data.</p></footer>
 </div>
 <noscript><p>JavaScript is needed for the playground. You can use the API directly at https://sifty.dev/spam,not+spam/Win+a+free+iPhone</p></noscript>
 <script>

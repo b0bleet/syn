@@ -44,7 +44,7 @@ curl http://127.0.0.1:8765/ -H 'Content-Type: application/json' \
 
 ## How it scores
 
-- **letters** (default): builds N cyclic option orderings so every option occupies every position once, reads label log-probs, averages, softmaxes. `ordering_agreement` exposes ordering disagreement, the signal that catches confidently wrong answers.
+- **letters** (default): one forward pass in the caller's option order, reading each label's next-token log-prob and softmaxing over those labels. `SYN_ORDERINGS=0` scores every rotation and averages them. `ordering_agreement` is 1 with a single order.
 - **pmi**: scores each option's text likelihood given the context, prior-corrected, in one masked forward. Order-invariant by construction. Helps with short label words; weak on long descriptive options.
 - **head**: a trained cross-attention head over frozen backbone features (`syn train-head`); local backend only, needs `SYN_HEAD_PATH`.
 - **pointer**: a backbone adapted by `syn train-pointer` (low-rank adapters, merged into the weights) read by a trained pointer head over delimited, isolated option spans. Order-invariant by construction; local backend only, needs `SYN_POINTER_PATH`.
@@ -159,14 +159,14 @@ CI (`.github/workflows/ci.yml`) tests every push and pull request. On `main` it 
 | Env | Default | Meaning |
 |---|---|---|
 | `SYN_BACKEND` | `local` | `local` or `sglang` |
-| `SYN_MODEL` | `Qwen/Qwen3-0.6B` | Qwen3 causal checkpoint |
+| `SYN_MODEL` | `Qwen/Qwen3-0.6B` | Qwen3, or a Qwen3.5 text model such as `Qwen/Qwen3.5-4B` |
 | `SYN_DEVICE` / `SYN_DTYPE` | `auto` | `cpu`/`mps`/`cuda`; `float32`/`bfloat16`/`float16` |
 | `SYN_READOUT` | `letters` | `letters`, `pmi`, `head`, `pointer` |
 | `SYN_PMI_LIST_OPTIONS` | `false` | pmi: name options in the prefix; helps some items, leaks order |
 | `SYN_HEAD_PATH` | unset | head: `.safetensors` checkpoint from `syn train-head` (its fitted temperature applies); a local path or `hf://<user>/<repo>/<path>` fetched at startup (`HF_TOKEN` for a private repo) |
 | `SYN_POINTER_PATH` | unset | pointer: `pointer.safetensors` from `syn train-pointer`, local or `hf://`; set `SYN_MODEL` to that run's `backbone/` |
 | `SYN_PROMPT_FORMAT` | `json` | `json` or `text` |
-| `SYN_ORDERINGS` | `0` | Cyclic orderings per request; `0` = one per option |
+| `SYN_ORDERINGS` | `1` | Option orders per request; `1` = the caller's order, `0` = one per option |
 | `SYN_TEMPERATURE` | `1` | Option-distribution temperature |
 | `SYN_ABSTAIN_THRESHOLD` / `SYN_MIN_CONFIDENCE` / `SYN_MIN_ORDERING_AGREEMENT` | `0` | Abstention gates |
 | `SYN_API_KEY` | unset | Bearer token on every classification route; `/health` stays open |
