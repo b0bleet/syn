@@ -50,6 +50,10 @@ export function queries(days: number): Record<string, string> {
     days: `SELECT toStartOfDay(timestamp) AS day, ${CALLS}, ${TEXTS},
              count(DISTINCT index1) AS users, ${KEYED}, ${LIMITED}, ${FAILED}, ${P50}, ${P95}
            ${from} GROUP BY day ORDER BY day DESC`,
+    // Same window as the other sections. The chart groups bars when a day range is wider than
+    // the drawing can show one bar per hour.
+    hours: `SELECT toStartOfInterval(timestamp, INTERVAL '1' HOUR) AS hour, ${CALLS}
+            ${from} GROUP BY hour ORDER BY hour`,
     endpoints: `SELECT blob1 AS endpoint, ${CALLS}, ${TEXTS},
                   sumIf(_sample_interval, blob2 >= '400') AS errors, ${P50}
                 ${from} GROUP BY endpoint ORDER BY calls DESC`,
@@ -115,7 +119,7 @@ async function content(days: number, env: StatsEnv): Promise<{ body: string; ok:
   try {
     const names = Object.entries(queries(days));
     const results = await Promise.all(names.map(([, sql]) => query(env, sql)));
-    return { body: render(Object.fromEntries(names.map(([name], i) => [name, results[i]]))), ok: true };
+    return { body: render(Object.fromEntries(names.map(([name], i) => [name, results[i]])), days), ok: true };
   } catch (error) {
     // The details can name the account; they belong in the logs, not on a public page.
     console.error("Stats query failed", error);
@@ -144,7 +148,7 @@ function tiles(values: [string, string | number | undefined][]): string {
   return `<div class="tiles">${values.map(([name, value]) => `<div><b>${count(value)}</b>${name}</div>`).join("")}</div>`;
 }
 
-function render(data: Record<string, Row[]>): string {
+function render(data: Record<string, Row[]>, days: number): string {
   const total = data.totals[0] ?? {};
   if (!Number(total.calls)) return "<p>No API calls in this period.</p>";
   return [
@@ -157,6 +161,8 @@ function render(data: Record<string, Row[]>): string {
       ["ms median response", total.p50_ms],
       ["ms for the slowest 5%", total.p95_ms],
     ]),
+    usageChart("Calls per day (UTC)", buckets(data.days ?? [], "day", 86_400_000, days)),
+    usageChart("Calls per hour (UTC)", buckets(data.hours ?? [], "hour", 3_600_000, days)),
     section("Per day (UTC)", data.days, "calls", {
       day: "day",
       calls: "calls",
@@ -189,6 +195,88 @@ function render(data: Record<string, Row[]>): string {
       waited_over_10s: "waited over 10 s (cold starts)",
     }),
   ].join("");
+}
+
+const DAY_MS = 86_400_000;
+const HOUR_MS = 3_600_000;
+// About one bar per four pixels on the 640-wide chart. Wider ranges sum neighboring hours.
+const MAX_BARS = 192;
+
+/** UTC buckets across the selected window, empty hours and days included, then summed to fit. */
+function buckets(rows: Row[], key: string, step: number, days: number, now = Date.now()): { t: number; n: number; hours: number }[] {
+  const start = Math.floor((now - days * DAY_MS) / step) * step;
+  const end = Math.floor(now / step) * step;
+  const values = new Map<number, number>();
+  for (const row of rows) {
+    const t = parseUtc(String(row[key] ?? ""));
+    if (Number.isNaN(t)) continue;
+    const bucket = Math.floor(t / step) * step;
+    values.set(bucket, (values.get(bucket) ?? 0) + (Number(row.calls) || 0));
+  }
+  const points: { t: number; n: number; hours: number }[] = [];
+  for (let t = start; t <= end; t += step) points.push({ t, n: values.get(t) ?? 0, hours: step / HOUR_MS });
+  if (points.length <= MAX_BARS) return points;
+  const size = Math.ceil(points.length / MAX_BARS);
+  const grouped: { t: number; n: number; hours: number }[] = [];
+  for (let i = 0; i < points.length; i += size) {
+    const slice = points.slice(i, i + size);
+    grouped.push({
+      t: slice[0].t,
+      n: slice.reduce((sum, point) => sum + point.n, 0),
+      hours: slice.reduce((sum, point) => sum + point.hours, 0),
+    });
+  }
+  return grouped;
+}
+
+function parseUtc(value: string): number {
+  const iso = value.includes("T") ? value : value.replace(" ", "T");
+  return Date.parse(/Z|[+-]\d\d:?\d\d$/.test(iso) ? iso : `${iso}Z`);
+}
+
+function stamp(t: number, withHour: boolean): string {
+  const date = new Date(t);
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(date.getUTCDate()).padStart(2, "0");
+  if (!withHour) return `${month}-${day}`;
+  return `${month}-${day} ${String(date.getUTCHours()).padStart(2, "0")}:00`;
+}
+
+/** A bar chart. `points` are already in time order. */
+function usageChart(title: string, points: { t: number; n: number; hours: number }[]): string {
+  if (!points.length) return "";
+  const block = points[0].hours;
+  const caption = block === 1 || block === 24 ? title : `${title}, ${block}-hour bars`;
+  const max = Math.max(...points.map((point) => point.n), 1);
+  const width = 640;
+  const height = 156;
+  const padL = 44;
+  const padR = 4;
+  const padT = 8;
+  const padB = 22;
+  const innerW = width - padL - padR;
+  const innerH = height - padT - padB;
+  const gap = points.length > 48 ? 0 : 1;
+  const barW = Math.max(innerW / points.length - gap, 0.3);
+  const baseline = padT + innerH;
+  const bars = points
+    .map((point, i) => {
+      const barH = (point.n / max) * innerH;
+      const x = padL + (i * innerW) / points.length;
+      const y = baseline - barH;
+      return `<rect x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${barW.toFixed(2)}" height="${barH.toFixed(2)}"/>`;
+    })
+    .join("");
+  const ticks = [0, Math.floor((points.length - 1) / 2), points.length - 1];
+  const labels = [...new Set(ticks)]
+    .map((i) => {
+      const x = padL + ((i + 0.5) * innerW) / points.length;
+      const anchor = i === 0 ? "start" : i === points.length - 1 ? "end" : "middle";
+      return `<text x="${x.toFixed(1)}" y="${height - 4}" text-anchor="${anchor}">${escape(stamp(points[i].t, block < 24))}</text>`;
+    })
+    .join("");
+  const described = `${caption}. Highest bar ${count(max)} calls.`;
+  return `<figure class="chart"><figcaption>${escape(caption)}</figcaption><svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${escape(described)}"><text x="0" y="${padT + 9}">${count(max)}</text><line x1="${padL}" y1="${baseline}" x2="${width - padR}" y2="${baseline}"/>${bars}${labels}</svg></figure>`;
 }
 
 /** A table, with a bar in the `bar` column scaled to its largest value. */
@@ -242,6 +330,12 @@ nav { display: flex; gap: 16px; font-size: 12px; }
 a { color: inherit; text-underline-offset: 3px; }
 .intro { font-size: 12px; margin: 12px 0 0; }
 h2 { font-size: 13px; font-weight: bold; margin: 32px 0 8px; }
+.chart { margin: 20px 0 0; }
+.chart figcaption { font-size: 12px; margin: 0 0 4px; }
+.chart svg { width: 100%; height: auto; display: block; }
+.chart rect { fill: #000; }
+.chart line { stroke: #000; }
+.chart text { font: 10px "Lucida Console", Monaco, monospace; fill: #000; }
 .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 10px; }
 .tiles div { border: 1px solid #000; padding: 12px; font-size: 11px; }
 .tiles b { display: block; font-size: 22px; font-weight: normal; }
@@ -256,6 +350,7 @@ td.bar span { position: absolute; left: 0; top: 5px; bottom: 5px; background: #0
 <header><h1><a href="/">sifty</a> API statistics</h1><nav>${links}</nav></header>
 <p class="intro">Live usage of the free API: today's counts as they happen, tables every 10 minutes. Only counts are recorded: no text, labels, or IP addresses.</p>
 ${body}
+<footer style="font-size:10px;margin-top:32px">Contact <a href="mailto:emin@jolo.build">emin@jolo.build</a></footer>
 <script>
 // Swap in fresh numbers every 30 s while the page is in view, for half an hour.
 let left = 60;

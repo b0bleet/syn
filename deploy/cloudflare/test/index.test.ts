@@ -471,6 +471,7 @@ function cloudflareSql(ok = true) {
   const calls: { url: string; init?: RequestInit }[] = [];
   const pick = (sql: string) => {
     if (sql.includes("AS day")) return [{ day: "2026-09-21 00:00:00", calls: "40", users: "9" }];
+    if (sql.includes("AS hour")) return [{ hour: "2026-09-22 00:00:00", calls: "6" }];
     if (sql.includes("AS endpoint")) return [{ endpoint: "POST /", calls: "30", texts: "45" }];
     if (sql.includes("AS source")) return [{ source: "direct", client: "<script>x</script>", calls: "2" }];
     if (sql.includes("gpu_seconds")) return [{ calls: "38", gpu_seconds: 19.4 }];
@@ -511,7 +512,7 @@ describe("public statistics page", () => {
     expect(page.status).toBe(200);
     expect(page.headers.get("content-type")).toContain("text/html");
     expect(await page.text()).toContain("<b>0</b>calls");
-    expect(calls.length).toBe(7);
+    expect(calls.length).toBe(8);
     expect(points).toHaveLength(0);
     runpod(DONE);
     expect((await call(env, "/a,b/hi")).status).toBe(200);
@@ -540,7 +541,7 @@ describe("public statistics page", () => {
     );
     expect(html).toMatch(/<h2>Last 7 days, updated \d\d:\d\d UTC<\/h2>/);
     // The next call shows at once; the tables aren't queried again.
-    expect(calls).toHaveLength(7);
+    expect(calls).toHaveLength(8);
     runpod(DONE);
     await call(env, "/a,b/hi", { ip: "192.0.2.4" });
     const again = cloudflareSql();
@@ -632,6 +633,9 @@ describe("public statistics page", () => {
     expect(html).toContain("<b>1,234</b>calls");
     expect(html).toContain("<b>1,303</b>ms median response");
     expect(html).toContain("<td>2026-09-21</td>");
+    expect(html).toContain("Calls per day (UTC)");
+    expect(html).toContain("Calls per hour (UTC)");
+    expect(html).toContain('role="img"');
     expect(html).toContain("<b>30 days</b>");
     expect(html).toContain("&#60;script&#62;");
     expect(html).not.toContain("<script>x");
@@ -644,12 +648,12 @@ describe("public statistics page", () => {
     const env = makeEnv(connected);
     const first = await call(env, "/stats");
     expect(first.headers.get("cache-control")).toBe("public, max-age=30");
-    expect(calls).toHaveLength(7);
+    expect(calls).toHaveLength(8);
     await call(env, "/stats?days=7");
     await call(env, "/stats?days=5;DROP");
-    expect(calls).toHaveLength(7);
+    expect(calls).toHaveLength(8);
     await call(env, "/stats?days=90");
-    expect(calls).toHaveLength(14);
+    expect(calls).toHaveLength(16);
     expect([...store.keys()]).toEqual([
       "https://sifty.example/stats?days=7",
       "https://sifty.example/stats?days=90",
@@ -657,19 +661,19 @@ describe("public statistics page", () => {
     // Another data center, or this one 30 s on, renders the page again but shares the tables.
     store.clear();
     await call(env, "/stats");
-    expect(calls).toHaveLength(14);
+    expect(calls).toHaveLength(16);
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(Date.now() + 600_000);
     store.clear();
     await call(env, "/stats");
-    expect(calls).toHaveLength(21);
+    expect(calls).toHaveLength(24);
   });
 
   it("queries a range once when views arrive together", async () => {
     const calls = cloudflareSql();
     const env = makeEnv(connected);
     await Promise.all([call(env, "/stats"), call(env, "/stats"), call(env, "/stats")]);
-    expect(calls).toHaveLength(7);
+    expect(calls).toHaveLength(8);
   });
 
   it("says so when not connected or failing, without the details, and retries after a minute", async () => {
@@ -685,13 +689,13 @@ describe("public statistics page", () => {
     expect(text).toContain("unavailable right now");
     expect(text).toContain("Today (UTC), live");
     expect(text).not.toContain("acc1");
-    expect(calls).toHaveLength(7);
+    expect(calls).toHaveLength(8);
     await call(env, "/stats");
-    expect(calls).toHaveLength(7);
+    expect(calls).toHaveLength(8);
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(Date.now() + 60_000);
     await call(env, "/stats");
-    expect(calls).toHaveLength(14);
+    expect(calls).toHaveLength(16);
     // Even with the live object down, the page answers.
     const down = await call(makeEnv({ LIVE: refusingLive() }), "/stats");
     expect(down.status).toBe(200);
