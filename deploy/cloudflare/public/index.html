@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>sifty: free text classification API with one URL</title>
-<meta name="description" content="Classify any text with your own labels using one URL. Free zero-shot API with a probability for every label. No training, no account, no API key.">
+<meta name="description" content="Classify any text with your own labels using one URL. Free, open-source zero-shot API with a probability for every label, compatible with the Jev System One API. No training, no account, no API key.">
 <link rel="canonical" href="https://sifty.dev/">
 <meta name="robots" content="index, follow, max-image-preview:large">
 <meta name="application-name" content="sifty">
@@ -79,6 +79,7 @@ nav { display: flex; gap: 24px; font-size: 12px; }
 main { flex: 1; display: flex; flex-direction: column; justify-content: flex-start; padding: clamp(32px, 7vh, 64px) 0 32px; }
 h1 { font-size: 22px; line-height: 1.4; font-weight: normal; margin: 0 0 12px; }
 .description { margin: 0 0 32px; font-size: 13px; }
+.switch { margin: -20px 0 32px; font-size: 12px; }
 .work { display: grid; grid-template-columns: 1.2fr 1fr; gap: 48px; }
 label, .result-title { display: block; margin: 0 0 8px; font-size: 12px; font-weight: normal; }
 textarea, input { width: 100%; border: 1px solid #000; border-radius: 0; background: #fff; padding: 12px; box-shadow: none; appearance: none; }
@@ -105,6 +106,7 @@ textarea:focus, input:focus, button:focus { outline: none; box-shadow: none; }
 .pct { text-align: right; }
 footer { font-size: 10px; }
 footer p { margin: 0; }
+footer p + p { margin-top: 4px; }
 #docs { max-width: 100%; }
 h2 { font-size: 18px; margin: 32px 0 12px; }
 h3 { font-size: 14px; margin: 24px 0 8px; }
@@ -141,12 +143,13 @@ pre { overflow: auto; border: 1px solid #000; padding: 16px; font-size: 12px; }
 <div class="site">
   <header>
     <a class="logo" href="#">sifty</a>
-    <nav aria-label="Navigation"><a id="docs-link" href="#docs">Docs</a><a href="/stats">Stats</a></nav>
+    <nav aria-label="Navigation"><a id="docs-link" href="#docs">Docs</a><a href="/stats">Stats</a><a href="https://github.com/b0bleet/syn">GitHub</a><a href="/contact">Contact</a></nav>
   </header>
   <main>
     <section id="playground" aria-labelledby="heading">
       <h1 id="heading">Text in. Label out.</h1>
       <p class="description">Classify text with your own labels. Free. No account or API key.</p>
+      <p class="switch">Using Jev? sifty answers the same System One API. It is open source and free, and you can host it yourself. <a href="#docs">Switch with one line</a></p>
       <div class="work">
         <div>
           <div class="field"><label for="text">Text</label><textarea id="text" spellcheck="false">Congratulations! You have won a free iPhone. Click the link to claim your prize.</textarea></div>
@@ -170,8 +173,8 @@ pre { overflow: auto; border: 1px solid #000; padding: 16px; font-size: 12px; }
       <p>Add <code>?verbose=1</code> for probabilities. Use POST for a batch:</p>
       <div class="block"><pre><code>curl <span class="origin">https://sifty.dev</span>/ -H 'Content-Type: application/json' \
   -d '{"input":["Win a free iPhone","Lunch at noon?"],"labels":["spam","not spam"]}'</code></pre><button class="copy" data-copy>Copy</button></div>
-      <h2>Python</h2>
-      <p>Install <a href="https://pypi.org/project/typesafe-sdk/">typesafe-sdk</a> to ask typed questions.</p>
+      <h2>Python, and coming from Jev</h2>
+      <p>sifty answers the System One API (<code>POST /v1/systemone</code>), so <a href="https://pypi.org/project/typesafe-sdk/">typesafe-sdk</a> works unchanged. Code written for Jev only needs a different <code>base_url</code>; Noul, Choice and Score questions are all supported.</p>
       <div class="block"><pre><code>from typesafe_sdk import Noul, TypeSafeClient
 
 client = TypeSafeClient(
@@ -184,15 +187,19 @@ response = client.system_one(
     questions={"billing": Noul(instructions="Is this about billing?")},
 )
 print(response.nouls["billing"].noul)</code></pre><button class="copy" data-copy>Copy</button></div>
+      <p>Differences from Jev: sifty runs an open model (Qwen3.5-4B) that is not trained for calibration, so treat probabilities as a ranking and check your labels on a few real examples. The code is on <a href="https://github.com/b0bleet/syn">GitHub</a> for self-hosting. sifty is an independent project, not affiliated with TypeSafe AI.</p>
       <h2>Limits</h2>
       <p>1,000 units per IP per day, reset at 00:00 UTC. A batch counts each text; a System One call counts each question. There is also a shared daily cap of 20,000 units.</p>
       <p>Use 2–26 labels, up to 32 texts per batch. The <code>X-RateLimit-Remaining</code> header tracks your allowance. A <code>429</code> response includes <code>Retry-After</code>.</p>
       <h2>How it works</h2>
-      <p>Qwen3.5-4B scores your labels using next-token probabilities in one forward pass. It does not generate a text response. A cold GPU may take up to a minute to wake.</p>
-      <p class="docs-note">Requests pass through Cloudflare and RunPod, whose logs may record them. Please don’t send sensitive data.</p>
+      <p>Qwen3.5-4B scores your labels using next-token probabilities in one forward pass. It does not generate a text response. One GPU is always on, so answers usually take about a second; in a traffic spike, an extra GPU can take up to a minute to start.</p>
+      <p class="docs-note">Requests pass through Cloudflare and RunPod. We retain request text, labels, results, and country/client metadata in private logs for 3 days to understand usage and debug problems. Public statistics contain only aggregates. Please don’t send sensitive data.</p>
     </section>
   </main>
-  <footer><p>Powered by Qwen3.5-4B. Predictions can be wrong. Please don’t send sensitive data.</p></footer>
+  <footer>
+    <p>Powered by Qwen3.5-4B. Predictions can be wrong. Requests and results are retained privately for 3 days. Please don’t send sensitive data.</p>
+    <p><a href="/contact">Contact us</a> at <a href="mailto:emin@jolo.build">emin@jolo.build</a></p>
+  </footer>
 </div>
 <noscript><p>JavaScript is needed for the playground. You can use the API directly at https://sifty.dev/spam,not+spam/Win+a+free+iPhone</p></noscript>
 <script>
@@ -246,7 +253,7 @@ print(response.nouls["billing"].noul)</code></pre><button class="copy" data-copy
     if (list.length < 2 || list.length > 26) return show("error", "Give 2 to 26 labels, separated by commas.");
     go.disabled = true;
     show("status", "Scoring…");
-    const slow = setTimeout(() => show("status", "Waking a GPU. After a quiet spell the first request takes up to a minute; the next ones take about 1–2 seconds."), 2500);
+    const slow = setTimeout(() => show("status", "Starting an extra GPU for a traffic spike. This can take up to a minute; later requests take about a second."), 2500);
     const started = performance.now();
     try {
       const response = await fetch("/", {

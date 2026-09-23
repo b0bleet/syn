@@ -2,6 +2,8 @@
 
 Zero-shot option scoring on pretrained Qwen3. No answer generation, no training required. Send a context, a question, and 2-26 options; get back a probability per option, the selected id, and abstention signals.
 
+It also answers the System One API (`POST /v1/systemone`) that Jev uses, so [typesafe-sdk](https://pypi.org/project/typesafe-sdk/) code works by changing `base_url` (see [TypeSafe SDK](#typesafe-sdk)). A free hosted instance runs at [sifty.dev](https://sifty.dev), no key needed.
+
 ## Run
 
 Requires Python 3.11-3.13 and [uv](https://docs.astral.sh/uv/).
