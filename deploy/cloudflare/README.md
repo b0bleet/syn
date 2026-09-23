@@ -33,6 +33,51 @@ exactly as `syn serve` does locally.
   100,000 points a day. The same call is added to today's live counts. Both happen after the
   answer is sent, so they never slow it. The page and its files aren't counted.
 
+## Private request dashboard (free)
+
+`REQUEST_LOGS=true` writes a structured `sifty.request` event when a classification payload is
+received, before quota checks or GPU work, and a second event when the API returns. Both share
+a `request_id`; `phase` is `received` or `completed`. A receipt without a completion can mean
+the request is still pending or the caller disconnected. Cloudflare can buffer/index logs after
+the invocation ends: this is not an instant queue monitor. Open
+**Cloudflare dashboard → Workers & Pages → syn → Observability**, select
+**Last 24 hours**, and filter the `event` field to `sifty.request`. Expand a record to see its
+`request` and `response`; filter by `country`, `client`, `source`, `endpoint`, or `status`.
+The Message column identifies the phase and endpoint. Use `phase = "completed"` for one row
+per finished call, or `phase = "received"` for submitted payloads. Use **Actions → Refresh**
+to fetch new stored events; **Live** follows new invocations. The table time is the log emission
+time, while the JSON `timestamp` is when the request arrived (UTC).
+Access is controlled by your Cloudflare account permissions; there is no public read endpoint.
+Public `/stats` continues to use content-free Analytics Engine events and aggregate live counts.
+
+Records include submitted text, labels/questions, the result, timestamp, country, region,
+city, timezone, network ASN/provider, Cloudflare data center, client family, source website
+hostname (when supplied), tier, units, status, and request/queue/GPU durations. Location comes
+from the network connection and may reflect a VPN or server. Headers, credentials, raw IPs,
+full referrer URLs, and unrelated query/body fields are not copied into the structured event.
+Sensitive information included in classification text itself is still content: do not submit it.
+Only classification routes create these events: GET `/<labels>/<text>`, GET `/?text=...&labels=...`,
+POST `/` (including every input in a batch), POST `/v1/score`, and POST `/v1/systemone`.
+Health, static pages, contact submissions, `/stats`, model discovery, documentation, unrelated
+routes, and HEAD/OPTIONS requests do not create request records. Quota refusals and backend
+failures on classification routes record their payload and status.
+
+Normal payloads are JSON objects. Each request/response longer than 12,000 serialized characters
+becomes a preview marked `truncated`; bodies over 128,000 characters are omitted with a reason.
+Malformed JSON is marked `invalid_json`. These limits affect logs only, never the API payload.
+
+Workers Free includes **200,000 log events per account per day, retained for 3 days**. This setup
+adds no paid subscription, KV, D1, or log export service. Invocation logs are disabled to avoid
+duplicate events and automatic raw-URL capture; errors still produce logs. The free allowance
+is shared across the account, and collection can stop at platform limits. The 20,000-unit API
+cap does not cover refused requests, keyed traffic, or other Workers. A **Last 24 hours** filter
+does not delete the other two days. Workers Paid has 7-day retention and different billing;
+keep Workers Free to avoid overage charges and update the public notice if that ever changes.
+See [Workers Logs pricing](https://developers.cloudflare.com/workers/observability/logs/workers-logs/#pricing).
+
+Set `REQUEST_LOGS=false` and deploy to stop content collection. Existing logs expire according
+to Cloudflare's retention. Only requests after deployment will have these structured records.
+
 ## Statistics
 
 `/stats` is a public page, linked from the site. At the top are today's counts (UTC), live:

@@ -369,9 +369,9 @@ td.bar span { position: absolute; left: 0; top: 5px; bottom: 5px; background: #0
 @media (max-width: 700px) { body { padding: 20px; } header { flex-direction: column; } td, th { white-space: normal; } }
 </style></head><body>
 <header><h1><a href="/">sifty</a> API statistics</h1><nav>${links}</nav></header>
-<p class="intro">Live usage of the free API: today's counts as they happen, tables every 10 minutes. Only counts are recorded: no text, labels, or IP addresses.</p>
+<p class="intro">Live usage of the free API: today's counts as they happen, tables every 10 minutes. This public page shows aggregate statistics only. Request contents are retained separately in private logs for 3 days.</p>
 ${body}
-<footer style="font-size:10px;margin-top:32px"><a href="/contact.html">Contact us</a> at <a href="mailto:emin@jolo.build">emin@jolo.build</a></footer>
+<footer style="font-size:10px;margin-top:32px"><a href="/contact">Contact us</a> at <a href="mailto:emin@jolo.build">emin@jolo.build</a></footer>
 <div id="chart-tip" hidden></div>
 <script>
 const tip = document.querySelector("#chart-tip");

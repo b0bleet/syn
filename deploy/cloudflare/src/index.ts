@@ -11,10 +11,12 @@
  * neither is counted or reaches a GPU. /health reports RunPod worker counts without waking a GPU.
  * Every API call is recorded, without its content, in the STATS dataset and today's LIVE counts,
  * after its answer is sent; /stats shows both publicly.
+ * REQUEST_LOGS additionally records request content in private Cloudflare Workers Logs.
  */
 
 import type { LiveStats } from "./live";
 import type { Quota } from "./quota";
+import { logRequest } from "./request-log";
 import { type StatsEnv, statsPage } from "./stats";
 
 export { LiveStats } from "./live";
@@ -27,6 +29,10 @@ export interface Env extends StatsEnv {
   RUNPOD_API_KEY: string;
   /** Secret: comma-separated keys that skip the free-tier limits. */
   API_KEYS?: string;
+  /** Secret: sending-only Resend key used by the public contact form. */
+  RESEND_API_KEY?: string;
+  /** Private structured Workers Logs, with the Workers Free plan's three-day retention. */
+  REQUEST_LOGS?: string;
   QUOTA: DurableObjectNamespace<Quota>;
   ASSETS: Fetcher;
   /** Free units per client IP per UTC day; one unit per request, or per text in a batch. */
@@ -97,6 +103,9 @@ const COMMAND_LINE = /^(curl|wget|httpie|xh)\//i;
 const PENDING = new Set(["IN_QUEUE", "IN_PROGRESS"]);
 // What callers see when the GPU side fails; the specifics go to the Worker's logs.
 const UNAVAILABLE = "The scoring service is temporarily unavailable. Please try again shortly.";
+const CONTACT_TO = "emin@jolo.build";
+const CONTACT_FROM = "sifty <contact@send.sifty.dev>";
+const CONTACT_LIMIT = 5;
 const CORS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Expose-Headers":
@@ -129,17 +138,48 @@ export default {
       });
     }
     if (url.pathname === "/health") return withCors(await health(env));
+    if (url.pathname === "/contact" && request.method === "POST") {
+      return contact(request, env, url);
+    }
     const reading = request.method === "GET" || request.method === "HEAD";
+    // Cloudflare Assets canonicalizes contact.html to /contact, so handle both names before the
+    // catch-all API route rather than treating the clean URL as a classification request.
+    if (reading && (url.pathname === "/contact" || url.pathname === "/contact.html")) {
+      return env.ASSETS.fetch(request);
+    }
     if (reading && url.pathname === "/stats") return statsPage(url, liveStats(env));
     if (reading && STATIC_FILES.has(url.pathname)) return env.ASSETS.fetch(request);
     if (reading && url.pathname === "/" && !url.search && wantsPage(request)) {
       return env.ASSETS.fetch(request);
     }
     const started = Date.now();
-    const call = await api(request, env, url);
+    const body = request.method === "GET" || request.method === "HEAD" ? null : await request.text();
+    const logInfo = env.REQUEST_LOGS === "true" ? {
+      request_id: crypto.randomUUID(),
+      endpoint: routeOf(request.method, url.pathname, url.search),
+      client: clientKind(request.headers.get("User-Agent") ?? ""),
+    } : null;
+    // Capture before any quota/GPU awaits: a cancelled invocation may never reach completion.
+    if (logInfo) logRequest(request, url, body, started, { ...logInfo, phase: "received" });
+    const call = await api(request, env, url, body);
+    const ms = Date.now() - started;
+    if (logInfo) {
+      logRequest(request, url, body, started, {
+        ...logInfo,
+        phase: "completed",
+        status: call.response.status,
+        tier: call.keyed ? "key" : "free",
+        units: call.units,
+        duration_ms: ms,
+        queue_ms: call.job?.delayTime,
+        gpu_ms: call.job?.executionTime,
+        response_body: isHttpOutput(call.job?.output) ? call.job.output.body : undefined,
+        response_is_json: call.response.headers.get("Content-Type")?.includes("json") ?? false,
+      });
+    }
     // Recorded after the answer is sent, so it never slows or costs a caller their answer.
     ctx.waitUntil(
-      record(request, url, call, Date.now() - started, env).catch((error) =>
+      record(request, url, call, ms, env).catch((error) =>
         console.error("API call not recorded", error),
       ),
     );
@@ -147,13 +187,100 @@ export default {
   },
 };
 
+interface ContactMessage {
+  name?: unknown;
+  email?: unknown;
+  message?: unknown;
+  company?: unknown;
+}
+
+/** Validate a same-site contact submission and relay it through Resend without exposing the key. */
+async function contact(request: Request, env: Env, url: URL): Promise<Response> {
+  const origin = request.headers.get("Origin");
+  if (origin && origin !== url.origin) return json({ detail: "This form must be sent from sifty." }, 403);
+  if (!(request.headers.get("content-type") ?? "").toLowerCase().startsWith("application/json")) {
+    return json({ detail: "Send the form as JSON." }, 415);
+  }
+  if (Number(request.headers.get("content-length") ?? 0) > 12_000) {
+    return json({ detail: "The message is too long." }, 413);
+  }
+
+  let data: ContactMessage;
+  try {
+    const raw = await request.text();
+    if (raw.length > 12_000) return json({ detail: "The message is too long." }, 413);
+    data = JSON.parse(raw) as ContactMessage;
+  } catch {
+    return json({ detail: "The form could not be read." }, 400);
+  }
+
+  // A hidden field catches simple bots. Pretend it worked so they do not adapt and retry.
+  if (typeof data.company === "string" && data.company.trim()) return json({ ok: true });
+  const name = typeof data.name === "string" ? data.name.trim() : "";
+  const email = typeof data.email === "string" ? data.email.trim() : "";
+  const message = typeof data.message === "string" ? data.message.trim() : "";
+  if (!name || name.length > 100) return json({ detail: "Enter your name (up to 100 characters)." }, 400);
+  if (!validEmail(email)) return json({ detail: "Enter a valid email address." }, 400);
+  if (!message || message.length > 5_000) {
+    return json({ detail: "Enter a message (up to 5,000 characters)." }, 400);
+  }
+  if (!env.RESEND_API_KEY) {
+    console.error("Contact form is missing RESEND_API_KEY");
+    return json({ detail: "The contact form is unavailable right now. Please email us directly." }, 503);
+  }
+
+  const now = new Date();
+  const day = now.toISOString().slice(0, 10);
+  const resetAt = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1);
+  const client = env.QUOTA.get(env.QUOTA.idFromName(`contact:${await clientId(request)}`));
+  const allowance = await client.take(1, CONTACT_LIMIT, day, resetAt);
+  if (!allowance.allowed) {
+    const retryAfter = String(Math.ceil((resetAt - now.getTime()) / 1000));
+    return json({ detail: "Too many messages today. Please email us directly." }, 429, {
+      "Retry-After": retryAfter,
+    });
+  }
+
+  const safeName = name.replace(/[\r\n]+/g, " ");
+  const digest = await sha256(`${day}\n${await clientId(request)}\n${name}\n${email}\n${message}`);
+  const idempotencyKey = `contact/${Array.from(digest, (b) => b.toString(16).padStart(2, "0")).join("")}`;
+  let response: Response | null = null;
+  try {
+    response = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${env.RESEND_API_KEY}`,
+        "Content-Type": "application/json",
+        "Idempotency-Key": idempotencyKey,
+      },
+      body: JSON.stringify({
+        from: CONTACT_FROM,
+        to: [CONTACT_TO],
+        reply_to: email,
+        subject: `sifty contact from ${safeName}`,
+        text: `Name: ${name}\nEmail: ${email}\n\n${message}`,
+      }),
+    });
+  } catch (error) {
+    console.error("Resend unreachable", error);
+  }
+  if (!response?.ok) {
+    console.error("Resend did not accept contact email", response?.status ?? "unreachable");
+    return json({ detail: "The message could not be sent. Please email us directly." }, 502);
+  }
+  return json({ ok: true });
+}
+
+function validEmail(value: string): boolean {
+  return value.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+}
+
 /** The one LiveStats object, shared by every data center. */
 function liveStats(env: Env): DurableObjectStub<LiveStats> {
   return env.LIVE.get(env.LIVE.idFromName("global"));
 }
 
-async function api(request: Request, env: Env, url: URL): Promise<ApiCall> {
-  const body = request.method === "GET" || request.method === "HEAD" ? null : await request.text();
+async function api(request: Request, env: Env, url: URL, body: string | null): Promise<ApiCall> {
   const cost = units(request.method, url.pathname, body);
   const keyed = await hasKey(request, env);
   let charge: Charge | null = null;

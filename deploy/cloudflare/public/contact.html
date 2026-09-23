@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Contact sifty</title>
+<meta name="description" content="Contact sifty with questions, feedback, or bug reports.">
+<link rel="canonical" href="https://sifty.dev/contact">
+<link rel="icon" href="/favicon.ico" sizes="48x48">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<style>
+* { box-sizing: border-box; }
+:root { color-scheme: light; font: 14px/1.65 "Lucida Console", Monaco, monospace; color: #000; background: #fff; }
+body { margin: 0; }
+button, input, textarea { font: inherit; color: inherit; }
+a { color: inherit; text-underline-offset: 3px; }
+.site { max-width: 1080px; min-height: 100svh; margin: auto; padding: 32px 40px 20px; display: flex; flex-direction: column; }
+header { display: flex; justify-content: space-between; align-items: baseline; gap: 20px; }
+.logo { font-size: 24px; font-weight: bold; text-decoration: none; }
+nav { display: flex; gap: 24px; font-size: 12px; }
+main { flex: 1; padding: clamp(48px, 10vh, 96px) 0 48px; max-width: 640px; width: 100%; }
+h1 { font-size: 22px; line-height: 1.4; font-weight: normal; margin: 0 0 20px; }
+p { margin: 0 0 18px; }
+form { margin-top: 28px; }
+label { display: block; margin: 0 0 6px; font-size: 12px; }
+.field { margin: 0 0 18px; }
+input, textarea { display: block; width: 100%; border: 1px solid #000; border-radius: 0; background: #fff; padding: 11px; appearance: none; }
+textarea { min-height: 180px; resize: vertical; }
+input:focus, textarea:focus, button:focus { outline: none; }
+.keyboard-focus input:focus, .keyboard-focus textarea:focus, .keyboard-focus button:focus { outline: 2px solid #000; outline-offset: 2px; }
+button { border: 1px solid #000; border-radius: 0; background: #fff; padding: 9px 18px; cursor: pointer; }
+button:hover { color: #fff; background: #000; }
+button:disabled { cursor: wait; opacity: .6; }
+.status { min-height: 24px; margin: 14px 0 0; font-size: 12px; }
+.direct { margin-top: 32px; font-size: 12px; }
+.trap { position: absolute; left: -10000px; width: 1px; height: 1px; overflow: hidden; }
+footer { font-size: 10px; }
+@media (max-width: 700px) {
+  .site { padding: 20px; }
+  header { align-items: flex-start; }
+  nav { gap: 16px; }
+  main { padding-top: 48px; }
+  h1 { font-size: 20px; }
+}
+</style>
+</head>
+<body>
+<div class="site">
+  <header>
+    <a class="logo" href="/">sifty</a>
+    <nav aria-label="Navigation"><a href="/#docs">Docs</a><a href="/stats">Stats</a><b>Contact</b></nav>
+  </header>
+  <main>
+    <h1>Contact us</h1>
+    <p>Questions, feedback, or found a bug? Send us a message.</p>
+    <form id="contact-form">
+      <div class="field">
+        <label for="name">Name</label>
+        <input id="name" name="name" maxlength="100" autocomplete="name" required>
+      </div>
+      <div class="field">
+        <label for="email">Email</label>
+        <input id="email" name="email" type="email" maxlength="254" autocomplete="email" required>
+      </div>
+      <div class="field">
+        <label for="message">Message</label>
+        <textarea id="message" name="message" maxlength="5000" required></textarea>
+      </div>
+      <div class="trap" aria-hidden="true">
+        <label for="company">Company website</label>
+        <input id="company" name="company" tabindex="-1" autocomplete="off">
+      </div>
+      <button id="send" type="submit">Send message</button>
+      <p class="status" id="status" role="status" aria-live="polite"></p>
+    </form>
+    <p class="direct">Or email <a href="mailto:emin@jolo.build?subject=sifty">emin@jolo.build</a> directly.</p>
+  </main>
+  <footer>Powered by Qwen3.5-4B. Predictions can be wrong. Please don’t send sensitive data.</footer>
+</div>
+<script>
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Tab") document.documentElement.classList.add("keyboard-focus");
+});
+document.addEventListener("pointerdown", () => document.documentElement.classList.remove("keyboard-focus"));
+const form = document.getElementById("contact-form");
+const send = document.getElementById("send");
+const status = document.getElementById("status");
+form.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (send.disabled) return;
+  send.disabled = true;
+  status.textContent = "Sending…";
+  const fields = new FormData(form);
+  try {
+    const response = await fetch("/contact", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(Object.fromEntries(fields)),
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.detail || "The message could not be sent.");
+    form.reset();
+    status.textContent = "Message sent. Thank you!";
+  } catch (error) {
+    status.textContent = error.message || "The message could not be sent. Please email us directly.";
+  } finally {
+    send.disabled = false;
+  }
+});
+</script>
+</body>
+</html>

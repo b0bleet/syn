@@ -81,7 +81,10 @@ function runpod(...replies: (object | Response)[]) {
   return calls;
 }
 
-async function call(env: Env, path: string, init: RequestInit & { ip?: string; key?: string } = {}) {
+async function call(
+  env: Env, path: string,
+  init: RequestInit & { ip?: string; key?: string; cf?: Partial<IncomingRequestCfProperties> } = {},
+) {
   const headers = new Headers(init.headers);
   headers.set("CF-Connecting-IP", init.ip ?? "203.0.113.7");
   if (init.key) headers.set("Authorization", `Bearer ${init.key}`);
@@ -89,6 +92,7 @@ async function call(env: Env, path: string, init: RequestInit & { ip?: string; k
   const pending: Promise<unknown>[] = [];
   const ctx = { waitUntil: (promise: Promise<unknown>) => void pending.push(promise) };
   const request = new Request(`https://sifty.example${path}`, { ...init, headers });
+  if (init.cf) Object.defineProperty(request, "cf", { value: init.cf });
   const response = await worker.fetch(request, env, ctx as unknown as ExecutionContext);
   await Promise.all(pending);
   return response;
@@ -99,6 +103,7 @@ async function detail(response: Response): Promise<string> {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
   vi.useRealTimers();
 });
@@ -213,6 +218,103 @@ describe("quota object", () => {
   });
 });
 
+describe("contact form", () => {
+  const message = { name: "Ada Lovelace", email: "ada@example.com", message: "Hello sifty!", company: "" };
+
+  it("relays a valid message through Resend with the visitor as reply-to", async () => {
+    const sends = vi.fn(async (_url: string, _init?: RequestInit) => Response.json({ id: "email-1" }));
+    vi.stubGlobal("fetch", sends);
+    const response = await call(makeEnv({ RESEND_API_KEY: "re-secret" }), "/contact", {
+      method: "POST",
+      headers: { "content-type": "application/json", Origin: "https://sifty.example" },
+      body: JSON.stringify(message),
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true });
+    expect(sends).toHaveBeenCalledTimes(1);
+    const [url, init] = sends.mock.calls[0];
+    expect(url).toBe("https://api.resend.com/emails");
+    expect(new Headers(init?.headers).get("authorization")).toBe("Bearer re-secret");
+    expect(new Headers(init?.headers).get("idempotency-key")).toMatch(/^contact\/[0-9a-f]{64}$/);
+    expect(JSON.parse(String(init?.body))).toEqual({
+      from: "sifty <contact@send.sifty.dev>",
+      to: ["emin@jolo.build"],
+      reply_to: "ada@example.com",
+      subject: "sifty contact from Ada Lovelace",
+      text: "Name: Ada Lovelace\nEmail: ada@example.com\n\nHello sifty!",
+    });
+  });
+
+  it("rejects invalid and cross-site submissions before sending", async () => {
+    const sends = vi.fn();
+    vi.stubGlobal("fetch", sends);
+    const env = makeEnv({ RESEND_API_KEY: "re-secret" });
+    const wrongOrigin = await call(env, "/contact", {
+      method: "POST",
+      headers: { "content-type": "application/json", Origin: "https://attacker.example" },
+      body: JSON.stringify(message),
+    });
+    expect(wrongOrigin.status).toBe(403);
+    const wrongType = await call(env, "/contact", { method: "POST", body: "hello" });
+    expect(wrongType.status).toBe(415);
+    const wrongEmail = await call(env, "/contact", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...message, email: "not-an-email" }),
+    });
+    expect(wrongEmail.status).toBe(400);
+    expect(sends).not.toHaveBeenCalled();
+  });
+
+  it("silently accepts the honeypot and reports missing or failed email service safely", async () => {
+    const sends = vi.fn(async () => new Response("private provider error", { status: 403 }));
+    vi.stubGlobal("fetch", sends);
+    const trapped = await call(makeEnv(), "/contact", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...message, company: "spam.example" }),
+    });
+    expect(await trapped.json()).toEqual({ ok: true });
+    expect(sends).not.toHaveBeenCalled();
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const missing = await call(makeEnv(), "/contact", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(message),
+    });
+    expect(missing.status).toBe(503);
+    const failed = await call(makeEnv({ RESEND_API_KEY: "re-secret" }), "/contact", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(message),
+    });
+    expect(failed.status).toBe(502);
+    expect(await detail(failed)).not.toContain("private provider error");
+  });
+
+  it("limits one address to five outbound messages a day", async () => {
+    const sends = vi.fn(async () => Response.json({ id: "email" }));
+    vi.stubGlobal("fetch", sends);
+    const env = makeEnv({ RESEND_API_KEY: "re-secret" });
+    for (let i = 0; i < 5; i++) {
+      const response = await call(env, "/contact", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ...message, message: `Message ${i}` }),
+      });
+      expect(response.status).toBe(200);
+    }
+    const limited = await call(env, "/contact", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(message),
+    });
+    expect(limited.status).toBe(429);
+    expect(limited.headers.get("Retry-After")).toBeTruthy();
+    expect(sends).toHaveBeenCalledTimes(5);
+  });
+});
+
 describe("page and CORS", () => {
   it("serves the page to browsers and preview bots, and the API to curl and queries", async () => {
     const env = makeEnv();
@@ -238,12 +340,13 @@ describe("page and CORS", () => {
     };
     const env = makeEnv({ DAILY_LIMIT: "1", ASSETS: { fetch: assets } as unknown as Fetcher });
     const calls = runpod(DONE);
-    for (const path of STATIC_FILES) {
+    const files = [...STATIC_FILES, "/contact", "/contact.html"];
+    for (const path of files) {
       const response = await call(env, path);
       expect(await response.text()).toBe("file");
       expect(response.headers.get("X-RateLimit-Remaining")).toBeNull();
     }
-    expect(served).toEqual([...STATIC_FILES]);
+    expect(served).toEqual(files);
     expect(calls).toHaveLength(0);
     // The one free unit is still there.
     expect((await call(env, "/a,b/hi")).status).toBe(200);
@@ -372,6 +475,193 @@ function refusingLive(): Env["LIVE"] {
   };
   return { idFromName: (name: string) => name, get: () => ({ add: refuse, page: refuse }) } as unknown as Env["LIVE"];
 }
+
+describe("private request logs", () => {
+  it("captures a payload before the backend responds, then links its completion", async () => {
+    const logged = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    let finish!: (response: Response) => void;
+    const backend = new Promise<Response>((resolve) => { finish = resolve; });
+    let entered!: () => void;
+    const submitted = new Promise<void>((resolve) => { entered = resolve; });
+    vi.stubGlobal("fetch", vi.fn(() => { entered(); return backend; }));
+    const payload = { input: ["queued first text", "queued second text"], labels: ["a", "b"] };
+    const pending = call(makeEnv({ REQUEST_LOGS: "true" }), "/", {
+      method: "POST", body: JSON.stringify(payload), cf: { country: "AZ" },
+    });
+    await submitted;
+    expect(logged).toHaveBeenCalledTimes(1);
+    const received = logged.mock.calls[0][0];
+    expect(received).toMatchObject({
+      event: "sifty.request", phase: "received", message: "Received POST /", level: "info",
+      request_id: expect.any(String), request: payload, country: "AZ", response: null,
+    });
+    expect(received.status).toBeUndefined();
+    finish(Response.json(DONE));
+    expect((await pending).status).toBe(200);
+    expect(logged).toHaveBeenCalledTimes(2);
+    expect(logged.mock.calls[1][0]).toMatchObject({
+      phase: "completed", request_id: received.request_id, timestamp: received.timestamp,
+      message: "Completed POST / — HTTP 200", status: 200, request: payload, response: "spam",
+    });
+  });
+
+  it("records content and country in private logs without leaking them to public statistics", async () => {
+    const logged = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const { points, dataset } = statsSink();
+    const env = makeEnv({ REQUEST_LOGS: "true", STATS: dataset });
+    const output = {
+      model: "test-model", results: [{ label: "billing", confidence: 0.9 }],
+      debug_secret: "response-secret",
+    };
+    const calls = runpod({ ...DONE, delayTime: 11, executionTime: 22, output: {
+      status: 200, headers: { "content-type": "application/json" }, body: JSON.stringify(output),
+    } });
+    const submitted = { input: ["private-ticket", "private-review"], labels: ["billing", "support"] };
+    const body = JSON.stringify({ ...submitted, api_key: "body-secret" });
+    const response = await call(env, "/?token=query-secret", {
+      method: "POST", key: "key-a", body,
+      headers: {
+        Origin: "https://sifty.example", Cookie: "cookie-secret",
+        "User-Agent": "python-httpx/0.28.1", "content-type": "application/json",
+        "X-Api-Key": "header-secret",
+      },
+      cf: { country: "AZ", region: "Baku", city: "Baku", timezone: "Asia/Baku", asn: 123,
+        asOrganization: "Example network", colo: "GYD" },
+    });
+    expect(await response.json()).toEqual(output);
+    expect(JSON.parse(calls[0].init?.body as string).input.http.body).toBe(body);
+    expect(logged).toHaveBeenCalledTimes(2);
+    expect(logged.mock.calls.filter(([entry]) => entry.phase === "completed")[0][0]).toMatchObject({
+      event: "sifty.request", endpoint: "POST /", client: "python", status: 200,
+      tier: "key", units: 2, country: "AZ", region: "Baku", city: "Baku", timezone: "Asia/Baku",
+      asn: 123, network: "Example network", datacenter: "GYD", source: "playground",
+      website: "sifty.example", request: submitted,
+      response: { model: "test-model", results: output.results }, queue_ms: 11, gpu_ms: 22,
+      timestamp: expect.any(String), duration_ms: expect.any(Number),
+    });
+    const privateData = JSON.stringify(logged.mock.calls);
+    for (const secret of ["key-a", "rp-secret", "203.0.113.7", "cookie-secret", "header-secret", "body-secret", "query-secret", "response-secret"]) {
+      expect(privateData).not.toContain(secret);
+    }
+    expect(JSON.stringify(points)).not.toContain("private-ticket");
+    expect(JSON.stringify(points)).not.toContain("billing");
+    cloudflareSql();
+    const publicPage = await (await call(env, "/stats")).text();
+    expect(publicPage).not.toContain("private-ticket");
+    expect(publicPage).not.toContain("private-review");
+    expect(logged).toHaveBeenCalledTimes(2);
+  });
+
+  it("decodes URL inputs without recording unrelated query parameters or referrer secrets", async () => {
+    const logged = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const env = makeEnv({ REQUEST_LOGS: "true" });
+    runpod(DONE, { ...DONE, output: { ...OK, body: "123\n" } });
+    await call(env, "/spam,a%2Cb/Hello+%2B+world%2Fnext&part?q=Which+team%3F&api_key=hidden", {
+      headers: { Referer: "https://user:password@example.org/private?secret=hidden" },
+    });
+    await call(env, "/?text=old&text=Win%2Ba+prize&labels=spam,not+spam&q=Is+this+spam%3F&token=hidden");
+    expect(logged.mock.calls.filter(([entry]) => entry.phase === "completed")[0][0]).toMatchObject({
+      website: "example.org", request: { text: "Hello + world/next&part", labels: ["spam", "a,b"], question: "Which team?" },
+      response: "spam",
+    });
+    expect(logged.mock.calls.filter(([entry]) => entry.phase === "completed")[1][0]).toMatchObject({
+      request: { text: "Win+a prize", labels: ["spam", "not spam"], question: "Is this spam?" }, response: "123",
+    });
+    expect(JSON.stringify(logged.mock.calls)).not.toMatch(/hidden|password|private\?/);
+  });
+
+  it.each([
+    ["/v1/score", { context: "My card was charged twice", question: "Which team?", criteria: "Pick one", options: [{ id: "a", text: "Billing" }, { id: "b", text: "Support" }] }],
+    ["/v1/systemone", { state: { ticket: "Charged twice" }, model: "syn-latest", questions: { billing: { type: "noul", instructions: "Is this billing?" } } }],
+  ])("captures the supported content fields of %s", async (path, payload) => {
+    const logged = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    runpod(DONE);
+    await call(makeEnv({ REQUEST_LOGS: "true" }), path, { method: "POST", body: JSON.stringify(payload) });
+    expect(logged.mock.calls.filter(([entry]) => entry.phase === "completed")[0][0].request).toEqual(payload);
+  });
+
+  it("logs quota refusals and backend failures, even when public statistics fail", async () => {
+    const logged = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const env = makeEnv({ REQUEST_LOGS: "true", DAILY_LIMIT: "1", LIVE: refusingLive() });
+    runpod({ status: "FAILED", error: "internal-backend-secret" }, DONE);
+    await call(env, "/a,b/hi");
+    await call(env, "/a,b/hi");
+    await call(env, "/a,b/hi");
+    expect(logged.mock.calls.filter(([entry]) => entry.phase === "completed").map(([entry]) => entry.status)).toEqual([502, 200, 429]);
+    expect(JSON.stringify(logged.mock.calls)).not.toContain("internal-backend-secret");
+    expect(logged.mock.calls.filter(([entry]) => entry.phase === "completed")[2][0].request.text).toBe("hi");
+  });
+
+  it("bounds large Unicode/escaped content without truncating the forwarded input or response", async () => {
+    const logged = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const body = JSON.stringify({ input: '漢字"\\\n'.repeat(4000), labels: ["a", "b"] });
+    const output = { ...OK, body: "漢".repeat(20_000) };
+    const calls = runpod({ ...DONE, output });
+    const response = await call(makeEnv({ REQUEST_LOGS: "true" }), "/", { method: "POST", body });
+    const event = logged.mock.calls.filter(([entry]) => entry.phase === "completed")[0][0];
+    expect(event.request.truncated).toBe(true);
+    expect(event.response.truncated).toBe(true);
+    expect(new TextEncoder().encode(JSON.stringify(event)).length).toBeLessThan(100_000);
+    expect(JSON.parse(calls[0].init?.body as string).input.http.body).toBe(body);
+    expect(await response.text()).toBe(output.body);
+  });
+
+  it("marks oversized and malformed API bodies, and excludes unrelated routes entirely", async () => {
+    const logged = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const env = makeEnv({ REQUEST_LOGS: "true", DAILY_LIMIT: "10" });
+    runpod(DONE, DONE, DONE, DONE);
+    await call(env, "/", { method: "POST", body: JSON.stringify({ input: "x".repeat(130_000) }) });
+    await call(env, "/", { method: "POST", body: "invalid-secret" });
+    await call(env, "/unknown", { method: "POST", body: "unknown-secret" });
+    await call(env, "/v1/models?token=query-secret");
+    expect(logged.mock.calls.filter(([entry]) => entry.phase === "completed").map(([entry]) => entry.request)).toEqual([
+      { omitted: "body_too_large", characters: expect.any(Number) }, { omitted: "invalid_json" },
+    ]);
+    expect(JSON.stringify(logged.mock.calls)).not.toMatch(/invalid-secret|unknown-secret|query-secret/);
+  });
+
+  it("does not save discovery, documentation, probes, or non-classification methods", async () => {
+    const logged = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const env = makeEnv({ REQUEST_LOGS: "true" });
+    const paths = ["/", "/?utm_source=website", "/docs", "/redoc", "/openapi.json", "/v1/models", "/unknown?text=probe&labels=a,b"];
+    runpod(...Array(paths.length + 3).fill(DONE));
+    for (const path of paths) await call(env, path, { key: "key-a", headers: { "User-Agent": "curl/8.7.1" } });
+    await call(env, "/a,b/hi", { method: "HEAD", key: "key-a" });
+    await call(env, "/a,b/hi", { method: "POST", body: "unknown-secret", key: "key-a" });
+    await call(env, "/", { method: "PUT", body: "unknown-secret", key: "key-a" });
+    expect(logged).not.toHaveBeenCalled();
+  });
+
+  it("supports disabling logs and excludes pages, stats, health, and contact submissions", async () => {
+    const logged = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    runpod(DONE, DONE);
+    await call(makeEnv(), "/a,b/hi");
+    await call(makeEnv({ REQUEST_LOGS: "false" }), "/a,b/hi");
+    const env = makeEnv({ REQUEST_LOGS: "true" });
+    await call(env, "/");
+    await call(env, "/robots.txt");
+    await call(env, "/contact");
+    await call(env, "/contact", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ company: "bot" }) });
+    await call(env, "/", { method: "OPTIONS" });
+    runpod({ workers: {} });
+    await call(env, "/health");
+    cloudflareSql();
+    await call(env, "/stats");
+    expect(logged).not.toHaveBeenCalled();
+  });
+
+  it("preserves API responses if logging fails", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => { throw new Error("logging unavailable"); });
+    const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    runpod(DONE);
+    const response = await call(makeEnv({ REQUEST_LOGS: "true" }), "/a,b/private-text");
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("spam\n");
+    expect(errors).toHaveBeenCalledWith("Private request log could not be written");
+    expect(JSON.stringify(errors.mock.calls)).not.toContain("private-text");
+  });
+});
 
 describe("API call statistics", () => {
   it("records each API call without its content, and nothing for the page or its files", async () => {

@@ -8,4 +8,8 @@
     <loc>https://sifty.dev/stats</loc>
     <changefreq>hourly</changefreq>
   </url>
+  <url>
+    <loc>https://sifty.dev/contact</loc>
+    <lastmod>2026-09-22</lastmod>
+  </url>
 </urlset>
