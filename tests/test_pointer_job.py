@@ -1,8 +1,11 @@
 """The pointer training job reads pointer-data/ and the launcher asks the pod to install it."""
 
 import importlib.util
+import os
 from argparse import Namespace
 from pathlib import Path
+
+import pytest
 
 _ROOT = Path(__file__).parents[1]
 
@@ -56,6 +59,10 @@ def _args(**overrides):
         "limit_per_source": 2000,
         "epochs": 8,
         "anchor": False,
+        "ordinal_weight": 0.0,
+        "balance_sources": False,
+        "holdout_selection": False,
+        "policy_cases": False,
     }
     values.update(overrides)
     return Namespace(**values)
@@ -69,9 +76,10 @@ def test_launcher_marks_a_pointer_pod(monkeypatch):
     assert pointer["env"]["SYN_TRAIN_TASK"] == "pointer"
     assert pointer["env"]["SYN_TRAIN_POINTER_EPOCHS"] == "2"
     assert pointer["env"]["SYN_TRAIN_ANCHOR"] == "0"
-    assert pointer["env"]["SYN_TRAIN_BALANCE_SOURCES"] == "1"
-    assert pointer["env"]["SYN_TRAIN_HOLDOUT_SELECTION"] == "1"
-    assert pointer["env"]["SYN_TRAIN_POLICY_CASES"] == "1"
+    assert pointer["env"]["SYN_TRAIN_ORDINAL_WEIGHT"] == "0.0"
+    assert pointer["env"]["SYN_TRAIN_BALANCE_SOURCES"] == "0"
+    assert pointer["env"]["SYN_TRAIN_HOLDOUT_SELECTION"] == "0"
+    assert pointer["env"]["SYN_TRAIN_POLICY_CASES"] == "0"
     anchored = runpod_train.build_request(
         _args(task="pointer", hf_repo="jolobuild/syn-training", epochs=None, anchor=True)
     )
@@ -88,3 +96,73 @@ def test_launcher_marks_a_pointer_pod(monkeypatch):
     head = runpod_train.build_request(_args())
     assert head["env"]["SYN_TRAIN_TASK"] == "head"
     assert 'extras="local,hub"' in head["dockerStartCmd"][-1]
+
+
+@pytest.mark.parametrize(
+    "flag,env,value",
+    [
+        (["--ordinal-weight", "1"], "ORDINAL_WEIGHT", "1.0"),
+        (["--balance-sources"], "BALANCE_SOURCES", "1"),
+        (["--holdout-selection"], "HOLDOUT_SELECTION", "1"),
+        (["--policy-cases"], "POLICY_CASES", "1"),
+    ],
+)
+def test_pointer_cli_changes_one_experiment_at_a_time(flag, env, value, capsys):
+    import json
+
+    base = [
+        "--task",
+        "pointer",
+        "--model",
+        "Qwen/Qwen3-8B-Base",
+        "--keep",
+        "--dry-run",
+        "--repo",
+        "https://github.com/example/syn",
+        "--ref",
+        "abc",
+        "--run",
+        "ce-only",
+        "--limit-per-source",
+        "0",
+    ]
+    runpod_train.main(base)
+    baseline = json.loads(capsys.readouterr().out)["env"]
+    runpod_train.main(base + flag)
+    experiment = json.loads(capsys.readouterr().out)["env"]
+    key = f"SYN_TRAIN_{env}"
+    assert {k for k in baseline if baseline[k] != experiment[k]} == {key}
+    assert experiment[key] == value
+    assert baseline["SYN_TRAIN_POINTER_EPOCHS"] == "2"
+    assert baseline["SYN_TRAIN_LIMIT_PER_SOURCE"] == "0"
+
+
+def test_pointer_job_defaults_reach_trainer(tmp_path, monkeypatch):
+    from syn import pointer
+
+    for key in list(os.environ):
+        if key.startswith("SYN_TRAIN_"):
+            monkeypatch.delenv(key)
+    files = {
+        split: [tmp_path / f"{split}.jsonl"] for split in ("train", "validation", "calibration")
+    }
+    for paths in files.values():
+        paths[0].write_text("{}\n")
+    monkeypatch.setattr(train_job, "prepare_pointer_data", lambda *a: (tmp_path, None))
+    monkeypatch.setattr(train_job, "pointer_rows", lambda *a: files)
+    captured = {}
+
+    def train(*args, **kwargs):
+        captured.update(kwargs)
+        args[2].mkdir(parents=True)
+        return {"best_val_top1": 0.5, "temperature": 1.0}
+
+    monkeypatch.setattr(pointer, "train_pointer", train)
+    train_job.run_pointer(None, tmp_path, "Qwen/Qwen3-8B-Base", "qwen", "test", lambda _: None)
+    assert captured["anchor"] is None
+    assert captured["anchor_weight"] == 0.0
+    assert captured["ordinal_weight"] == 0.0
+    assert captured["balance_sources"] is False
+    assert captured["holdout_selection"] is False
+    assert captured["policy_cases"] is False
+    assert captured["limit_per_source"] == 0

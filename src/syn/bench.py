@@ -13,6 +13,7 @@ needs TYPESAFE_API_KEY. Any other name needs a URL, asks for syn-latest, and sen
 reference every other target is paired against.
 """
 
+import hashlib
 import json
 import math
 import os
@@ -230,6 +231,7 @@ def run_target(
             "example_index": index,
             "example_sha256": digests[index],
             "expected_option_id": example.expected_option_id,
+            "source": example.source,
             "target": target.name,
             "target_url": target.url,
             "requested_model": target.model,
@@ -318,6 +320,13 @@ def target_metrics(rows: list[dict], bootstrap: int = 1000) -> dict:
 
 def paired(reference: list[dict], other: list[dict], samples: int = 1000) -> dict | None:
     """`other` against `reference` on the examples both scored; a is the reference."""
+    if len(reference) != len(other):
+        raise ValueError("Paired runs must contain the same requested examples")
+    for a, b in zip(reference, other):
+        if any(
+            a.get(k) != b.get(k) for k in ("example_index", "example_sha256", "expected_option_id")
+        ):
+            raise ValueError("Paired examples differ; identical rows and ordering required")
     common = [
         i for i, (a, b) in enumerate(zip(reference, other)) if "choice" in a and "choice" in b
     ]
@@ -327,11 +336,22 @@ def paired(reference: list[dict], other: list[dict], samples: int = 1000) -> dic
     cb = [_correct(other[i]) for i in common]
     return {
         "examples": len(common),
+        "requested_examples": len(reference),
+        "unpaired_examples": len(reference) - len(common),
         "accuracy_reference": sum(ca) / len(common),
         "accuracy": sum(cb) / len(common),
         **paired_difference(ca, cb, samples),
         "same_choice": sum(reference[i]["choice"] == other[i]["choice"] for i in common)
         / len(common),
+    }
+
+
+def summarize_runs(runs: dict[str, list[dict]], reference: str) -> dict:
+    return {
+        "targets": {t: target_metrics(rows) for t, rows in runs.items()},
+        "paired_vs_reference": {
+            t: paired(runs[reference], rows) for t, rows in runs.items() if t != reference
+        },
     }
 
 
@@ -369,6 +389,25 @@ def markdown(summary: dict) -> str:
                 f"[{low:+.3f}, {high:+.3f}] over {p['examples']} paired examples; "
                 f"same choice {p['same_choice']:.0%}"
             )
+        if result.get("per_source"):
+            lines += [
+                "",
+                "| source | target | scored / requested | accuracy | delta vs reference (95% CI) |",
+                "|---|---|---|---|---|",
+            ]
+            for source, group in result["per_source"].items():
+                for target, m in group["targets"].items():
+                    accuracy = f"{m['top1_accuracy']:.3f}" if m["scored"] else "—"
+                    pair = group["paired_vs_reference"].get(target)
+                    delta = "—"
+                    if pair:
+                        low, high = pair["difference_ci95"]
+                        delta = f"{pair['difference_b_minus_a']:+.3f} [{low:+.3f}, {high:+.3f}]"
+                    label = source.replace("|", "\\|")
+                    lines.append(
+                        f"| {label} | {target} | {m['scored']} / {m['examples']} "
+                        f"| {accuracy} | {delta} |"
+                    )
         lines.append("")
     return "\n".join(lines)
 
@@ -387,14 +426,22 @@ def bench(
         raise ValueError("Give one or more targets with distinct names")
     # Validate every dataset before contacting any target.
     loaded = {}
+    fingerprints = {}
     for path in datasets:
         examples = [EvalExample.model_validate(row) for row in read_jsonl(path)]
         name = dataset_name(path)
         if name in loaded:
             raise ValueError(f"Two datasets are both named {name!r}; rename one")
         loaded[name] = examples[:limit] if limit else examples
+        fingerprints[name] = hashlib.sha256(path.read_bytes()).hexdigest()
     reference = targets[0].name
-    summary = {"reference": reference, "concurrency": concurrency, "datasets": {}}
+    summary = {
+        "reference": reference,
+        "concurrency": concurrency,
+        "datasets": {},
+        "protocol": "One converted question per request; ordinal rows use score, others choice. "
+        "Published reference scores use their own native suite protocol and are not paired baselines.",
+    }
     for name, examples in loaded.items():
         runs = {}
         for target in targets:
@@ -411,9 +458,21 @@ def bench(
                     client.close()
         summary["datasets"][name] = {
             "examples": len(examples),
-            "targets": {t: target_metrics(rows) for t, rows in runs.items()},
-            "paired_vs_reference": {
-                t: paired(runs[reference], rows) for t, rows in runs.items() if t != reference
+            "dataset_sha256": fingerprints[name],
+            **summarize_runs(runs, reference),
+            "per_source": {
+                source: summarize_runs(
+                    {
+                        t: [
+                            row
+                            for row, example in zip(rows, examples)
+                            if (example.source or "unknown") == source
+                        ]
+                        for t, rows in runs.items()
+                    },
+                    reference,
+                )
+                for source in sorted({example.source or "unknown" for example in examples})
             },
         }
     out.mkdir(parents=True, exist_ok=True)

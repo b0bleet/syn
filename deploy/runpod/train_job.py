@@ -38,12 +38,12 @@ SYN_TRAIN_POINTER_MAX_TOKENS (1024), SYN_TRAIN_POINTER_CHECKPOINTING (1),
 SYN_TRAIN_ANCHOR (0), SYN_TRAIN_ANCHOR_WEIGHT (1), SYN_TRAIN_ANCHOR_ORDERINGS (1).
 The anchor is off because its teacher is the letters readout in the chat prompt, while the
 pointer learns a cloze prefix. `--anchor` sets SYN_TRAIN_ANCHOR=1.
-SYN_TRAIN_BALANCE_SOURCES (1) gives every source the same total loss weight.
-SYN_TRAIN_HOLDOUT_SELECTION (1) holds out the median-sized source and selects the checkpoint
+SYN_TRAIN_ORDINAL_WEIGHT defaults to 0 for the pointer task (cross-entropy only).
+SYN_TRAIN_BALANCE_SOURCES (0) gives every source the same total loss weight when enabled.
+SYN_TRAIN_HOLDOUT_SELECTION (0) holds out the median-sized source and selects the checkpoint
 on that source's validation rows. The locked transfer file is not used for selection.
-SYN_TRAIN_POLICY_CASES (1) adds, for policy rows, a copy that states the day count between
-dates and a copy whose deciding case sentence was removed. The second copy trains an even
-distribution over the options.
+SYN_TRAIN_POLICY_CASES (0) adds a copy that states the day count between dates when enabled.
+Automatic uniform-label copies are disabled: removing a numeral does not prove uncertainty.
 Rows come from pointer-data/<source>/{train,validation,calibration}.jsonl, not from data/.
 test.jsonl beside those splits is scored and not trained on. With SYN_TRAIN_ANCHOR=1 the
 base model's letters readout writes an anchor file and the pointer loss stays near it.
@@ -419,12 +419,12 @@ def run_pointer(repo: str | None, root: Path, model: str, model_slug: str, run: 
             setting("P_NONE_DISTRACT", 0.12, float),
             setting("P_DISTRACT", 0.15, float),
         ),
-        ordinal_weight=setting("ORDINAL_WEIGHT", 1.0, float),
+        ordinal_weight=setting("ORDINAL_WEIGHT", 0.0, float),
         max_tokens=setting("POINTER_MAX_TOKENS", 1024, int),
         limit_per_source=limit,
-        balance_sources=setting("BALANCE_SOURCES", "1") != "0",
-        holdout_selection=setting("HOLDOUT_SELECTION", "1") != "0",
-        policy_cases=setting("POLICY_CASES", "1") != "0",
+        balance_sources=setting("BALANCE_SOURCES", "0") != "0",
+        holdout_selection=setting("HOLDOUT_SELECTION", "0") != "0",
+        policy_cases=setting("POLICY_CASES", "0") != "0",
         checkpointing=setting("POINTER_CHECKPOINTING", "1") != "0",
         log=log,
     )

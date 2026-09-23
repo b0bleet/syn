@@ -1,9 +1,9 @@
-"""Extra policy rows: state the day count, and train an even answer when the deciding fact is gone.
+"""Date-count copies for an opt-in training experiment.
 
 A policy row is a written rule plus a case. When the case gives two dates, a copy of the row
-appends the number of days between them. A second copy drops the case sentence that carries
-the number, and training then targets a uniform distribution over the options instead of the
-original label.
+appends the number of days between them. Labels are preserved. Do not infer uniform targets
+by deleting the first numeric sentence: that sentence may be irrelevant, other facts may
+still decide the answer, and some options may be impossible under the policy.
 """
 
 import re
@@ -83,28 +83,8 @@ def date_facts(text: str) -> str:
     return " ".join(sentences)
 
 
-def withhold_case(context: str) -> str | None:
-    """The context with the case sentence that contains a number removed.
-
-    Returns None when there is no `case:` section or no such sentence. The policy text stays.
-    """
-    marker = "case:"
-    index = context.lower().find(marker)
-    if index < 0:
-        return None
-    head = context[: index + len(marker)]
-    parts = re.split(r"(?<=[.!?])\s+", context[index + len(marker) :].strip())
-    for position, part in enumerate(parts):
-        if re.search(r"\d", part):
-            kept = " ".join(parts[:position] + parts[position + 1 :]).strip()
-            if not kept:
-                return None
-            return f"{head} {kept}"
-    return None
-
-
 def extra_cases(rows: list[EvalExample]) -> list[EvalExample]:
-    """Date-count copies and withheld-fact copies of rows that are policies."""
+    """Append entailed date differences without changing the answer or deleting evidence."""
     extra: list[EvalExample] = []
     for row in rows:
         if row.uniform:
@@ -118,16 +98,6 @@ def extra_cases(rows: list[EvalExample]) -> list[EvalExample]:
                         "request": row.request.model_copy(
                             update={"context": f"{context}\n\ndate_facts: {facts}"}
                         )
-                    }
-                )
-            )
-        withheld = withhold_case(context)
-        if withheld is not None and withheld != context:
-            extra.append(
-                row.model_copy(
-                    update={
-                        "request": row.request.model_copy(update={"context": withheld}),
-                        "uniform": True,
                     }
                 )
             )

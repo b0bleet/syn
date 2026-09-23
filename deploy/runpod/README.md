@@ -92,9 +92,16 @@ uv run python scripts/runpod_train.py --model Qwen/Qwen3-8B --hf-repo <user>/syn
   backbone plus `pointer.safetensors` to `pointers/<model>/<run>/`. `--epochs` applies
   here too (default 2). Adapter rank 16, batch 2 with 4 accumulation steps, and gradient
   checkpointing. The anchor is off unless `--anchor` is passed: its teacher is the letters
-  readout in the chat prompt, while the pointer learns a cloze prefix. Each source gets the
-  same total loss weight, and the checkpoint is the one that scores best on a median-sized
-  source held out of training. The locked transfer file is only scored at the end.
+  readout in the chat prompt, while the pointer learns a cloze prefix. Pointer training now
+  defaults to cross-entropy only (`--ordinal-weight 0`), ordinary row weights, and checkpoint
+  selection on in-domain validation. The transfer file is only scored at the end of each run;
+  repeated experimentation makes it a development set, not an untouched final test.
+  `--balance-sources`, `--holdout-selection`, and `--policy-cases` are independent opt-in
+  experiments. Policy copies only append date counts; the automatic uniform-label generator
+  was removed because it could delete irrelevant evidence and teach an incorrect target.
+  `--ordinal-weight 1` restores the anchor-off run's ordinal loss. The head task's ordinal
+  default remains 1. Use `--limit-per-source 0` to match the complete 14,576-row pointer run.
+  The checkpoint sidecar records experiment flags, training-row counts and input-file hashes.
   Serve from the store with
   `SYN_MODEL=hf://<user>/<repo>/pointers/<model>/<run>/backbone`,
   `SYN_READOUT=pointer`, and
@@ -103,6 +110,41 @@ uv run python scripts/runpod_train.py --model Qwen/Qwen3-8B --hf-repo <user>/syn
 - `pointer-data/README.md` in the store records where those rows came from. Choice questions
   with more than 26 options are dropped on import. Structured state and criteria are flattened
   to labeled lines, the same rendering `syn serve` uses.
+
+## Next controlled pointer experiment
+
+Wait for the current anchor-off result before allocating another pod. After committing and
+pushing the changes, preview the CE-only experiment (the preview makes no API request):
+
+```sh
+uv run python scripts/runpod_train.py --task pointer \
+  --model Qwen/Qwen3-8B-Base --revision 49e3418fbbbca6ecbdf9608b4d22e5a407081db4 \
+  --hf-repo jolobuild/syn-training --limit-per-source 0 --epochs 2 \
+  --ordinal-weight 0 --run qwen3-8b-ce-only --dry-run
+```
+
+This uses rank 16, learning rate `5e-5`, batch 2, accumulation 4, seed 7, maximum 1,024
+tokens, and the existing none/distractor augmentation. Anchor, balancing, source holdout,
+and date copies are off. Compare with the anchor-off run before changing another setting.
+The pinned base revision matches the earlier 8B checkpoint; verify the anchor-off checkpoint
+has that revision and the same input data before calling this a controlled comparison.
+
+For a paired serving comparison, serve a pinned reference Qwen3-8B checkpoint on port 8009 and
+the trained SYN pointer on port 8765, then use the same converted rows for both:
+
+```sh
+uv run syn bench data/pointer-upload/transfer-dev.jsonl --out runs/reference-paired \
+  --target reference@reference-latest=http://127.0.0.1:8009 \
+  --target syn=http://127.0.0.1:8765
+```
+
+The report includes overall and per-source accuracy, calibration metrics, paired bootstrap
+intervals, row failures and the dataset hash. Use a new output directory for each checkpoint
+pair: resume verifies rows and endpoint/model names, not the weights behind a running server.
+Record checkpoint revisions separately. Require all 764 rows to score before claiming a win.
+This protocol sends each converted row as one question, with binary questions represented
+as choice. It is a common comparison protocol, not a reproduction of the reference model's published native
+suite scores. Evaluate an untouched transfer test only after all model selection is complete.
 
 ## Notes
 

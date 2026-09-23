@@ -276,6 +276,11 @@ def test_train_pointer_end_to_end_on_a_tiny_backbone(tmp_path):
     assert sidecar["temperature"] == result["temperature"] > 0
     assert sidecar["delimiters"]["ids"] == list(delimiter_ids(tokenizer))
     assert sidecar["sources"] == ["tickets"] and sidecar["history"][0]["epoch"] == 1
+    from syn.head import file_sha256
+
+    assert sidecar["data_files_sha256"]["train"] == {str(data): file_sha256(data)}
+    assert sidecar["policy_cases"] is False and sidecar["policy_rows_added"] == 0
+    assert sidecar["balance_sources"] is False and sidecar["holdout_selection"] is False
 
     # The saved run serves through the ordinary local backend with the pointer readout.
     served = Settings(

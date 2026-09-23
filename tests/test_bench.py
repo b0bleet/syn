@@ -8,7 +8,7 @@ from helpers import CharacterTokenizer, ContentBackend, make_scorer
 
 from syn import cli
 from syn.api import create_app
-from syn.bench import TargetError, bench, parse_target, run_target, to_systemone
+from syn.bench import TargetError, bench, paired, parse_target, run_target, to_systemone
 from syn.config import Settings
 from syn.schema import EvalExample, ScoreRequest
 from syn.systemone import SystemOneRequest
@@ -17,6 +17,22 @@ BASE = {
     "question": "Choose a team",
     "options": [{"id": "sales", "text": "Sales"}, {"id": "billing", "text": "Billing"}],
 }
+
+
+def test_paired_rejects_different_or_reordered_examples():
+    rows = [
+        {"example_index": i, "example_sha256": str(i), "expected_option_id": "a", "choice": "a"}
+        for i in range(2)
+    ]
+    with pytest.raises(ValueError, match="identical rows"):
+        paired(rows, list(reversed(rows)))
+    with pytest.raises(ValueError, match="same requested examples"):
+        paired(rows, rows[:1])
+    wrong = [{**rows[0], "example_sha256": "different"}, rows[1]]
+    with pytest.raises(ValueError, match="identical rows"):
+        paired(rows, wrong)
+
+
 ROWS = [
     {"request": {"context": "Duplicate charge", **BASE}, "expected_option_id": "billing"},
     {"request": {"context": "Wants a quote", **BASE}, "expected_option_id": "sales"},
@@ -122,7 +138,7 @@ def test_bench_pairs_jev_with_this_service_and_resumes(monkeypatch, tmp_path):
     monkeypatch.setenv("SYN_API_KEY", "local-key")
     dataset = tmp_path / "eval" / "routing.jsonl"
     dataset.parent.mkdir()
-    write(dataset, ROWS)
+    write(dataset, [{**r, "source": "short" if i < 2 else "long"} for i, r in enumerate(ROWS)])
     targets = [parse_target("jev"), parse_target("syn=http://testserver")]
     calls = []
     jev = httpx.Client(transport=httpx.MockTransport(jev_handler(calls)), base_url="http://jev/")
@@ -146,6 +162,14 @@ def test_bench_pairs_jev_with_this_service_and_resumes(monkeypatch, tmp_path):
         assert (pair["examples"], pair["accuracy_reference"], pair["accuracy"]) == (2, 1.0, 0.5)
         assert pair["difference_b_minus_a"] == -0.5 and pair["only_a_correct"] == 1
         assert pair["same_choice"] == 0.5
+        assert pair["requested_examples"] == 3 and pair["unpaired_examples"] == 1
+        assert len(result["dataset_sha256"]) == 64
+        assert set(result["per_source"]) == {"short", "long"}
+        short = result["per_source"]["short"]
+        assert short["targets"]["jev"]["top1_accuracy"] == 1.0
+        assert short["paired_vs_reference"]["syn"]["difference_b_minus_a"] == -0.5
+        assert result["per_source"]["long"]["targets"]["syn"]["errors"] == 1
+        assert result["per_source"]["long"]["paired_vs_reference"]["syn"] is None
 
         assert json.loads((out / "summary.json").read_text()) == summary
         table = (out / "summary.md").read_text()

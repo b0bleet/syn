@@ -431,9 +431,11 @@ def train_pointer(
     dtype = torch.bfloat16 if device == "cuda" else torch.float32
     train_rows = load_rows(train, limit_per_source)
     val_rows = load_rows(validation)
+    policy_rows_added = 0
     if policy_cases:
         added = extra_cases(train_rows)
         if added:
+            policy_rows_added = len(added)
             log(f"policy cases: {len(added)} extra training rows")
             train_rows = train_rows + added
     selection_source = None
@@ -453,6 +455,17 @@ def train_pointer(
     cal_rows = load_rows(calibration) if calibration else None
     test_rows = load_rows(test) if test else None
     indomain_rows = load_rows(indomain) if indomain else None
+    data_files = {}
+    for split, paths in (
+        ("train", train),
+        ("validation", validation),
+        ("calibration", calibration),
+        ("transfer", test),
+        ("in_domain", indomain),
+    ):
+        if paths is not None:
+            paths = [paths] if isinstance(paths, (str, Path)) else paths
+            data_files[split] = {str(path): file_sha256(Path(path)) for path in paths}
     anchors = load_anchors(anchor) if anchor else None
     if anchors is not None:
         from .evaluation import example_digest
@@ -652,6 +665,12 @@ def train_pointer(
             "sources": sources,
             "selection_source": selection_source,
             "balance_sources": balance_sources,
+            "holdout_selection": holdout_selection,
+            "policy_cases": policy_cases,
+            "policy_rows_added": policy_rows_added,
+            "limit_per_source": limit_per_source,
+            "training_rows": len(train_rows),
+            "data_files_sha256": data_files,
             "best_val_top1": best,
             "validation_at_temperature": {
                 "negative_log_likelihood": final.get("negative_log_likelihood"),
