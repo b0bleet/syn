@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 
 from .backends import Backend, BackendError
 from .config import Settings
-from .prompt import CLOZE_VERSION, HEAD_VERSION, POINTER_VERSION, PromptBuilder
+from .prompt import CLOZE_VERSION, HEAD_VERSION, POINTER_VERSION, PromptBuilder, PromptError
 from .schema import OptionScore, ScoreRequest, ScoreResponse
 
 # log_softmax can exceed zero by rounding; anything larger is a backend bug, not noise.
@@ -76,6 +76,8 @@ class Scorer:
 
     def score(self, request: ScoreRequest) -> ScoreResponse:
         started = time.perf_counter()
+        if request.image is not None and self.settings.readout != "letters":
+            raise PromptError("Images work with the letters readout only")
         if self.settings.readout == "pmi":
             return self._score_pmi(request, started)
         if self.settings.readout == "head":

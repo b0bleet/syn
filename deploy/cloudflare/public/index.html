@@ -173,6 +173,11 @@ pre { overflow: auto; border: 1px solid #000; padding: 16px; font-size: 12px; }
       <p>Add <code>?verbose=1</code> for probabilities. Use POST for a batch:</p>
       <div class="block"><pre><code>curl <span class="origin">https://sifty.dev</span>/ -H 'Content-Type: application/json' \
   -d '{"input":["Win a free iPhone","Lunch at noon?"],"labels":["spam","not spam"]}'</code></pre><button class="copy" data-copy>Copy</button></div>
+      <h2>Images</h2>
+      <p>Send an <code>image</code> instead of, or with, text: a public image URL, or a <code>data:image/…;base64,</code> upload of up to about 6 MB. The same labels, questions and answers apply.</p>
+      <div class="block"><pre><code>curl <span class="origin">https://sifty.dev</span>/ -H 'Content-Type: application/json' \
+  -d '{"image":"https://upload.wikimedia.org/wikipedia/commons/3/3a/Cat03.jpg","labels":["cat","dog","other"]}'</code></pre><button class="copy" data-copy>Copy</button></div>
+      <p>Ask a question with <code>"question"</code>, add text about the image with <code>"input"</code>, or use <code>?labels=cat,dog&amp;image=&lt;url&gt;</code> in a GET. System One requests take a top-level <code>"image"</code> that every question is asked about. Images are never stored: private logs keep only whether it was a URL or an upload, the URL's host, and its size.</p>
       <h2>Python, and coming from Jev</h2>
       <p>sifty answers the System One API (<code>POST /v1/systemone</code>), so <a href="https://pypi.org/project/typesafe-sdk/">typesafe-sdk</a> works unchanged. Code written for Jev only needs a different <code>base_url</code>; Noul, Choice and Score questions are all supported.</p>
       <div class="block"><pre><code>from typesafe_sdk import Noul, TypeSafeClient
@@ -197,7 +202,7 @@ print(response.nouls["billing"].noul)</code></pre><button class="copy" data-copy
     </section>
   </main>
   <footer>
-    <p>Powered by Qwen3.5-4B. Predictions can be wrong. Requests and results are retained privately for 3 days. Please don’t send sensitive data.</p>
+    <p>Powered by Qwen3.5-4B. Predictions can be wrong. Requests and results are retained privately for 3 days. Images are never stored. Please don’t send sensitive data.</p>
     <p><a href="/contact">Contact us</a> at <a href="mailto:emin@jolo.build">emin@jolo.build</a></p>
   </footer>
 </div>

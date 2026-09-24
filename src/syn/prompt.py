@@ -4,6 +4,7 @@ import string
 import uuid
 from dataclasses import dataclass
 
+from . import images
 from .schema import ScoreRequest
 
 PROMPT_VERSIONS = {"json": "qwen-options-v1", "text": "qwen-options-text-v1"}
@@ -13,6 +14,8 @@ HEAD_VERSION = "qwen-head-v1"
 # The pointer readout: the same prefix, delimited isolated option spans, one decide token.
 POINTER_VERSION = "qwen-pointer-v1"
 PRIOR_CONTEXT = "(none)"
+# The context of an image request that has no text: the image is the whole state.
+IMAGE_CONTEXT = "(the image above)"
 LABELS = string.ascii_uppercase
 CLOZE_RULES = (
     "Select the single best option for the question using the context and criteria. "
@@ -41,6 +44,8 @@ class PreparedPrompt:
     label_token_ids: list[int]
     # Control-token lookalikes rewritten in the request text before rendering.
     rewritten_control_tokens: int = 0
+    # An image prompt's processor tensors (pixel values, patch grid), in model-input names.
+    vision: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -57,10 +62,20 @@ class ClozePrompt:
 
 
 class PromptBuilder:
-    def __init__(self, tokenizer, max_tokens: int, prompt_format: str = "json"):
+    def __init__(
+        self,
+        tokenizer,
+        max_tokens: int,
+        prompt_format: str = "json",
+        processor=None,
+        image_max_pixels: int = 1024 * 1024,
+    ):
         if prompt_format not in PROMPT_VERSIONS:
             raise ValueError(f"Unknown prompt format {prompt_format!r}")
         self.tokenizer = tokenizer
+        # The model's multimodal processor; None means requests with an image are refused.
+        self.processor = processor
+        self.image_max_pixels = image_max_pixels
         self.max_tokens = max_tokens
         self.prompt_format = prompt_format
         self.version = PROMPT_VERSIONS[prompt_format]
@@ -72,9 +87,11 @@ class PromptBuilder:
         self.label_cache: dict[str, int] = {}
         self._probe()
 
-    def _render(self, content: str, rules: str = RULES) -> str:
+    def _render(self, content: str, rules: str = RULES, image: bool = False) -> str:
+        # An image goes first in the user turn; the template writes its placeholder there.
+        user = [{"type": "image"}, {"type": "text", "text": content}] if image else content
         return self.tokenizer.apply_chat_template(
-            [{"role": "system", "content": rules}, {"role": "user", "content": content}],
+            [{"role": "system", "content": rules}, {"role": "user", "content": user}],
             tokenize=False,
             add_generation_prompt=True,
             enable_thinking=False,
@@ -147,11 +164,12 @@ class PromptBuilder:
         return sanitized, count
 
     def _content(self, request: ScoreRequest, options, labels: list[str]) -> str:
+        context = request.context or IMAGE_CONTEXT
         if self.prompt_format == "json":
             # JSON keeps arbitrary descriptions distinct from our option labels.
             return json.dumps(
                 {
-                    "context": request.context,
+                    "context": context,
                     "question": request.question,
                     "criteria": request.criteria,
                     "options": [
@@ -163,7 +181,7 @@ class PromptBuilder:
             )
         # Plain sections keep multi-line states readable; option continuation lines are indented
         # so the lettered list survives embedded newlines.
-        lines = ["Context:", request.context, "", "Question:", request.question, ""]
+        lines = ["Context:", context, "", "Question:", request.question, ""]
         lines += ["Criteria:", request.criteria or "(none)", "", "Options:"]
         lines += [
             f"{label}. " + option.text.replace("\n", "\n   ")
@@ -181,6 +199,8 @@ class PromptBuilder:
                 raise ValueError("option_order must be a permutation of the option indices")
             options = [options[i] for i in option_order]
         labels = list(LABELS[: len(options)])
+        if request.image is not None:
+            return self._prepare_image(request, options, labels, rewritten)
         rendered = self._render(self._content(request, options, labels))
         ids = self._encode(rendered)
         if len(ids) > self.max_tokens:
@@ -199,6 +219,36 @@ class PromptBuilder:
         if len(set(token_ids)) != len(token_ids):
             raise PromptError("Option labels map to duplicate token IDs")
         return PreparedPrompt(ids, labels, token_ids, rewritten)
+
+    def _prepare_image(self, request: ScoreRequest, options, labels, rewritten) -> PreparedPrompt:
+        """The same lettered prompt with the image ahead of it, expanded by the processor.
+
+        The processor turns the template's single image placeholder into one token per image
+        patch. The prompt still ends with the template's fixed tail, so each label's token is the
+        one learned when the builder was created.
+        """
+        if self.processor is None:
+            raise PromptError("This server does not accept images")
+        try:
+            image = images.load_cached(request.image, self.image_max_pixels)
+        except images.ImageError as exc:
+            raise PromptError(str(exc)) from exc
+        rendered = self._render(self._content(request, options, labels), image=True)
+        encoded = self.processor(text=[rendered], images=[image], return_tensors="pt")
+        ids = encoded["input_ids"][0].tolist()
+        if len(ids) > self.max_tokens:
+            raise PromptError(
+                f"Prompt has {len(ids)} tokens; limit is {self.max_tokens}. No truncation applied."
+            )
+        if (
+            self.suffix_ids is None
+            or ids[-len(self.suffix_ids) :] != self.suffix_ids
+            or not all(label in self.label_cache for label in labels)
+        ):
+            raise PromptError("This tokenizer cannot place option labels after an image")
+        token_ids = [self.label_cache[label] for label in labels]
+        vision = {k: v for k, v in encoded.items() if k not in ("input_ids", "attention_mask")}
+        return PreparedPrompt(ids, labels, token_ids, rewritten, vision)
 
     def _cloze_content(self, request: ScoreRequest, context: str, list_options: bool) -> str:
         content = (

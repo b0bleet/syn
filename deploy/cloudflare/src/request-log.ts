@@ -45,13 +45,28 @@ function bounded(value: unknown): unknown {
   };
 }
 
+/**
+ * What an image field is, never the image: its kind, the URL's host or the data URI's media
+ * type, and its length. Pictures people send are not kept, even privately.
+ */
+function image(value: unknown): unknown {
+  if (typeof value !== "string") return undefined;
+  if (value.slice(0, 5).toLowerCase() === "data:") {
+    return { kind: "data", type: value.slice(5, value.indexOf(";")).slice(0, 40), characters: value.length };
+  }
+  return { kind: "url", host: host(value), characters: value.length };
+}
+
 function jsonContent(body: string, fields: string[]): unknown {
   // Do not parse or copy arbitrarily large bodies just for logging; forwarding is unchanged.
   if (body.length > MAX_BODY_CHARS) {
     return { omitted: "body_too_large", characters: body.length };
   }
   try {
-    return bounded(pick(JSON.parse(body), fields));
+    const parsed = JSON.parse(body);
+    const picked = pick(parsed, fields);
+    const summary = image(parsed?.image);
+    return bounded(summary === undefined ? picked : { ...picked, image: summary });
   } catch {
     return { omitted: "invalid_json" };
   }
@@ -63,8 +78,13 @@ function submitted(method: string, url: URL, body: string | null): unknown {
   }
   if (method !== "GET") return null;
   const query = (key: string) => url.searchParams.getAll(key).at(-1) ?? null;
-  if (url.pathname === "/" && (query("text") !== null || query("labels") !== null)) {
-    return bounded({ text: query("text"), labels: query("labels")?.split(","), question: query("q") });
+  if (url.pathname === "/" && (query("text") !== null || query("labels") !== null || query("image") !== null)) {
+    return bounded({
+      text: query("text"),
+      labels: query("labels")?.split(","),
+      question: query("q"),
+      ...(query("image") === null ? {} : { image: image(query("image")) }),
+    });
   }
   const [head, ...tail] = url.pathname.slice(1).split("/");
   if (!head.includes(",") || !tail.length) return null;

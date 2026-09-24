@@ -52,6 +52,13 @@ class Settings(BaseSettings):
     # rows x padded width would exceed this, then split, so long contexts cannot exhaust memory.
     local_batch_tokens: int = Field(default=16384, ge=1)
     log_path: Path | None = None
+    # Accept images (an `image` URL or data: URI in a request). Needs a multimodal Qwen3.5
+    # checkpoint: the full model loads, vision encoder included, and text prompts run through the
+    # same language model as without it.
+    images: bool = False
+    # Images are scaled down to at most this many pixels, which bounds their tokens (about one
+    # token per 32 x 32 pixel patch on Qwen3.5).
+    image_max_pixels: int = Field(default=1024 * 1024, ge=32 * 32, le=16 * 1024 * 1024)
 
     @field_validator("head_path", "pointer_path", mode="before")
     @classmethod

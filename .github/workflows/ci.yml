@@ -42,7 +42,7 @@ jobs:
       # CPU-only torch at the locked version; the default Linux wheel pulls ~2.5 GB of CUDA.
       - run: |
           torch=$(awk '/^name = "torch"$/{getline; print; exit}' uv.lock | sed -E 's/version = "(.*)"/\1/')
-          uv pip install "torch==$torch" numpy safetensors \
+          uv pip install "torch==$torch" numpy safetensors pillow \
             --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple
       - run: uv run --no-sync ruff check src tests deploy
       - run: uv run --no-sync ruff format --check src tests deploy

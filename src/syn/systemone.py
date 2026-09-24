@@ -17,7 +17,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import Field
 
-from .schema import ScoreRequest, ScoreResponse, StrictModel
+from .schema import ImageReference, ScoreRequest, ScoreResponse, StrictModel
 
 JSONContent = str | dict[str, Any] | list[Any]
 MODEL_ALIAS = "syn-latest"
@@ -61,6 +61,8 @@ class SystemOneRequest(StrictModel):
     state: JSONContent
     model: str
     questions: dict[str, Question] = Field(min_length=1, max_length=32)
+    # A sifty extension: an image every question is asked about, alongside the state.
+    image: ImageReference | None = None
 
 
 class NoulAnswer(StrictModel):
@@ -141,7 +143,7 @@ def described(name: str, description: JSONContent | None) -> str:
     return name if description is None else f"{name}: {render(description)}"
 
 
-def to_request(state: str, question: Question) -> ScoreRequest | None:
+def to_request(state: str, question: Question, image: str | None = None) -> ScoreRequest | None:
     """The scoring request for one question; None when a single option answers it outright."""
     if isinstance(question, NoulQuestion):
         criteria = question.criteria or NoulCriteria()
@@ -157,7 +159,10 @@ def to_request(state: str, question: Question) -> ScoreRequest | None:
         return None
     instructions = question.instructions
     ask = DEFAULT_INSTRUCTIONS[question.type] if instructions is None else render(instructions)
-    return ScoreRequest.model_validate({"context": state, "question": ask, "options": options})
+    payload = {"context": state, "question": ask, "options": options}
+    if image is not None:
+        payload["image"] = image
+    return ScoreRequest.model_validate(payload)
 
 
 def to_answer(question: Question, response: ScoreResponse | None):
@@ -190,7 +195,7 @@ def system_one(
     """Answer every question about the state. Raises ValueError for an unscorable question."""
     state = render(request.state)
     # Build every request first, so an invalid question fails before any scoring runs.
-    built = {name: to_request(state, q) for name, q in request.questions.items()}
+    built = {name: to_request(state, q, request.image) for name, q in request.questions.items()}
     answers, tokens = {}, 0
     for name, question in request.questions.items():
         response = score(built[name]) if built[name] is not None else None

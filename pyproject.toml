@@ -13,7 +13,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-local = ["torch>=2.6,<3", "numpy>=1.26,<3", "safetensors>=0.4,<1"]
+local = ["torch>=2.6,<3", "numpy>=1.26,<3", "safetensors>=0.4,<1", "pillow>=10,<13"]
 hub = ["datasets>=3,<5"]
 # Backbone adapters for `syn train-pointer`; serving a trained pointer needs only `local`.
 train = ["peft>=0.15,<1"]

@@ -19,6 +19,7 @@ RESERVED = frozenset(
     {"v1", "health", "docs", "redoc", "openapi.json", "metrics", "favicon.ico", "robots.txt"}
 )
 DEFAULT_QUESTION = "Which label best applies to the text?"
+IMAGE_QUESTION = "Which label best applies to the image?"
 
 
 class ShorthandError(ValueError):
@@ -74,10 +75,16 @@ def check(labels: list[str], text: str) -> tuple[list[str], str]:
     return labels, text
 
 
-def build_request(labels: list[str], text: str, question: str | None = None) -> dict:
+def build_request(
+    labels: list[str], text: str, question: str | None = None, image: str | None = None
+) -> dict:
     """A ScoreRequest payload where each label is both the option id and its description."""
-    return {
+    default = IMAGE_QUESTION if image is not None else DEFAULT_QUESTION
+    payload = {
         "context": text,
-        "question": (question or DEFAULT_QUESTION).strip() or DEFAULT_QUESTION,
+        "question": (question or default).strip() or default,
         "options": [{"id": label, "text": label} for label in labels],
     }
+    if image is not None:
+        payload["image"] = image
+    return payload

@@ -55,6 +55,22 @@ The service abstains (`selected_option_id: null`, `abstain_reasons`) below the `
 
 Label wording changes answers more than anything else. Use neutral, parallel labels and verify any label set on your own examples. `SYN_PROMPT_FORMAT=text` renders labelled sections instead of JSON for multi-line states.
 
+## Images
+
+With `SYN_IMAGES=true` and a multimodal Qwen3.5 checkpoint such as `Qwen/Qwen3.5-4B`, a request can carry an `image`: an `https` URL or a `data:image/...;base64,` URI. The image goes ahead of the usual prompt and the same letters readout scores the labels, so answers come back exactly like text answers. Text-only requests score the same as with images off: given only token ids, the full model runs the same language model the text-only class loads.
+
+```sh
+curl http://127.0.0.1:8765/ -H 'Content-Type: application/json' \
+  -d '{"image": "https://example.com/photo.jpg", "labels": ["cat", "dog", "other"]}'
+curl "http://127.0.0.1:8765/?labels=helmet,no+helmet&image=https%3A%2F%2Fexample.com%2Fsite.jpg"
+```
+
+On `POST /`, `input` becomes optional text about the image (one text, not a batch). `/v1/score` takes `image` beside or instead of `context`, and `/v1/systemone` takes a top-level `image` that every question is asked about. The default question becomes "Which label best applies to the image?".
+
+Images are at most 10 MB and are scaled down to `SYN_IMAGE_MAX_PIXELS` (about one token per 32 x 32 pixels). A URL is fetched by the server: `http` or `https` only, public addresses only (checked again on the address actually connected to), at most 3 redirects, 10 s. Images work with the letters readout only.
+
+`scripts/image_benchmark.py` scores Imagenette photos against all ten class names. On 200 images (20 per class) Qwen3.5-4B got all 200 right, median top-label probability 0.993, and a control of plain gray images drew the same label every time, so the answers come from the pictures. Imagenette's classes are easy to tell apart; this shows images work end to end, not how a hard task will go. Check your own labels on a few real images.
+
 ## Data
 
 `scripts/download_data.py` rebuilds all of `data/`: the HF imports used for the measurements below, the synthetic routing set, and the `data/eval/` subsets:
@@ -177,6 +193,8 @@ CI (`.github/workflows/ci.yml`) tests every push and pull request. On `main` it 
 | `SYN_SGLANG_CHECK_MODEL` | `true` | Refuse to start if SGLang serves another model |
 | `SYN_MAX_PROMPT_TOKENS` | `8192` | Reject longer prompts; never truncate |
 | `SYN_LOCAL_BATCH_TOKENS` | `16384` | Token budget per batched local forward |
+| `SYN_IMAGES` | `false` | Accept an `image` in requests; loads the full multimodal Qwen3.5 checkpoint |
+| `SYN_IMAGE_MAX_PIXELS` | `1048576` | Images are scaled down to at most this many pixels |
 
 ## Checks
 

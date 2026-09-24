@@ -140,6 +140,19 @@ def check_remote(settings: Settings, backend, commit: str | None) -> dict:
     return info
 
 
+def load_processor(settings: Settings, model: str, extra: dict, tokenizer):
+    """Image inputs for the model when images are enabled, else None (images are refused)."""
+    if not settings.images:
+        return None
+    from transformers import Qwen2VLImageProcessorPil
+
+    from .images import ImageInputs
+
+    # Named explicitly: the automatic loader and the default (fast) processor need torchvision.
+    processor = Qwen2VLImageProcessorPil.from_pretrained(model, **extra)
+    return ImageInputs(processor, tokenizer)
+
+
 def create_app(settings: Settings | None = None, scorer: Scorer | None = None) -> FastAPI:
     settings = settings or Settings()
 
@@ -166,7 +179,14 @@ def create_app(settings: Settings | None = None, scorer: Scorer | None = None) -
             commit = revision_commit(config)
             model, extra = pretrained_call(settings.model, settings.revision)
             tokenizer = AutoTokenizer.from_pretrained(model, trust_remote_code=False, **extra)
-            builder = PromptBuilder(tokenizer, settings.max_prompt_tokens, settings.prompt_format)
+            processor = load_processor(settings, model, extra, tokenizer)
+            builder = PromptBuilder(
+                tokenizer,
+                settings.max_prompt_tokens,
+                settings.prompt_format,
+                processor,
+                settings.image_max_pixels,
+            )
             if settings.backend == "local":
                 backend = LocalBackend(settings, config)
             else:
@@ -263,9 +283,11 @@ def create_app(settings: Settings | None = None, scorer: Scorer | None = None) -
     def list_models():
         return models(settings.model, settings.readout)
 
-    def to_request(labels: list[str], text: str, question: str | None) -> ScoreRequest:
+    def to_request(
+        labels: list[str], text: str, question: str | None, image: str | None = None
+    ) -> ScoreRequest:
         try:
-            return ScoreRequest.model_validate(build_request(labels, text, question))
+            return ScoreRequest.model_validate(build_request(labels, text, question, image))
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
 
@@ -289,12 +311,18 @@ def create_app(settings: Settings | None = None, scorer: Scorer | None = None) -
     def classify_query(
         labels: str | None = Query(None, description="Comma-separated labels"),
         text: str | None = Query(None, description="Text to classify"),
+        image: str | None = Query(
+            None, description="Image URL to classify instead of, or with, text"
+        ),
         q: str | None = Query(None, description="Question to ask; defaults to a generic one"),
         fmt: Literal["json", "label"] | None = Query(None, alias="format"),
         verbose: bool = Query(False, description="JSON with label, confidence, and scores"),
     ):
-        if labels is None and text is None:
+        if labels is None and text is None and image is None:
             return PlainTextResponse(USAGE)
+        if image is not None:
+            parsed_labels = [label.strip() for label in (labels or "").split(",") if label.strip()]
+            return answer(to_request(parsed_labels, (text or "").strip(), q, image), fmt, verbose)
         try:
             parsed_labels, parsed_text = check((labels or "").split(","), text or "")
         except ShorthandError as exc:
@@ -304,11 +332,14 @@ def create_app(settings: Settings | None = None, scorer: Scorer | None = None) -
     @app.post(
         "/",
         response_model=ClassifyResponse,
-        summary="Classify one text or a batch of up to 32 against labels",
+        summary="Classify one text, a batch of up to 32, or an image against labels",
         dependencies=[Depends(require_key)],
     )
     def classify_body(body: ClassifyRequest):
         started = time.perf_counter()
+        if body.image is not None:
+            request = to_request(body.labels, body.input or "", body.question, body.image)
+            return _classified([run(request)], started)
         texts = [body.input] if isinstance(body.input, str) else body.input
         # Validate the whole batch before scoring any of it.
         requests = [to_request(body.labels, text, body.question) for text in texts]

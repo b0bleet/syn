@@ -112,6 +112,10 @@ const COMMAND_LINE = /^(curl|wget|httpie|xh)\//i;
 const PENDING = new Set(["IN_QUEUE", "IN_PROGRESS"]);
 // What callers see when the GPU side fails; the specifics go to the Worker's logs.
 const UNAVAILABLE = "The scoring service is temporarily unavailable. Please try again shortly.";
+// A request body at most this large: an image sent as a data: URI, base64 included. Larger
+// images go by URL, which the GPU side fetches itself.
+const MAX_BODY_BYTES = 8 * 1024 * 1024;
+const TOO_LARGE = "The request is over 8 MB. Send a smaller image, or its URL as `image`.";
 const CONTACT_TO = "emin@jolo.build";
 const CONTACT_FROM = "sifty <contact@send.sifty.dev>";
 const CONTACT_LIMIT = 5;
@@ -162,7 +166,14 @@ export default {
       return env.ASSETS.fetch(request);
     }
     const started = Date.now();
+    const size = Number(request.headers.get("Content-Length") ?? 0);
+    if (size > MAX_BODY_BYTES) {
+      return withCors(json({ detail: TOO_LARGE }, 413));
+    }
     const body = request.method === "GET" || request.method === "HEAD" ? null : await request.text();
+    if (body !== null && body.length > MAX_BODY_BYTES) {
+      return withCors(json({ detail: TOO_LARGE }, 413));
+    }
     const logInfo = env.REQUEST_LOGS === "true" ? {
       request_id: crypto.randomUUID(),
       endpoint: routeOf(request.method, url.pathname, url.search),
@@ -411,7 +422,9 @@ async function dailyClient(request: Request, day: string, secret: string): Promi
 
 /** Units a request costs: one, or one per text in a batch or per question in System One. */
 export function units(method: string, path: string, body: string | null): number {
-  if (method !== "POST" || !body) return 1;
+  // A large body is an image upload, one unit. Parsing megabytes would spend the Worker's CPU
+  // budget (10 ms on the free plan) just to count.
+  if (method !== "POST" || !body || body.length > 128_000) return 1;
   try {
     const data = JSON.parse(body);
     if (path === "/" && Array.isArray(data?.input)) return Math.max(1, data.input.length);

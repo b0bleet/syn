@@ -51,7 +51,8 @@ def load(report) -> None:
             report("importing the model libraries")
             from transformers import AutoTokenizer
 
-            from syn.api import create_app, load_head, load_pointer
+            from syn.api import create_app, load_head, load_pointer, load_processor
+            from syn.artifacts import pretrained_call
             from syn.backends import LocalBackend, resolve_config, revision_commit
             from syn.config import Settings
             from syn.prompt import PromptBuilder
@@ -65,7 +66,14 @@ def load(report) -> None:
             tokenizer = AutoTokenizer.from_pretrained(
                 settings.model, revision=settings.revision, trust_remote_code=False
             )
-            builder = PromptBuilder(tokenizer, settings.max_prompt_tokens, settings.prompt_format)
+            model, extra = pretrained_call(settings.model, settings.revision)
+            builder = PromptBuilder(
+                tokenizer,
+                settings.max_prompt_tokens,
+                settings.prompt_format,
+                load_processor(settings, model, extra, tokenizer),
+                settings.image_max_pixels,
+            )
             report("loading the weights onto the GPU")
             backend = LocalBackend(settings, config)
             head, head_sha, head_temperature, pointer = None, None, None, None

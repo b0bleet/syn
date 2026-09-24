@@ -476,6 +476,52 @@ function refusingLive(): Env["LIVE"] {
   return { idFromName: (name: string) => name, get: () => ({ add: refuse, page: refuse }) } as unknown as Env["LIVE"];
 }
 
+describe("images", () => {
+  const PIXELS = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
+  it("logs what an image is, never the image or its full URL", async () => {
+    const logged = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const env = makeEnv({ REQUEST_LOGS: "true" });
+    runpod(DONE, DONE);
+    const uploaded = { image: `data:image/png;base64,${PIXELS}`, labels: ["cat", "dog"], question: "Which?" };
+    expect((await call(env, "/", { method: "POST", body: JSON.stringify(uploaded) })).status).toBe(200);
+    const url = "https://photos.example/private/2026/me.jpg?token=secret";
+    const query = `/?labels=cat,dog&image=${encodeURIComponent(url)}`;
+    expect((await call(env, query)).status).toBe(200);
+    const records = logged.mock.calls.map(([record]) => record.request);
+    expect(records[0]).toEqual({
+      labels: ["cat", "dog"], question: "Which?",
+      image: { kind: "data", type: "image/png", characters: uploaded.image.length },
+    });
+    expect(records[2]).toMatchObject({
+      labels: ["cat", "dog"], image: { kind: "url", host: "photos.example", characters: url.length },
+    });
+    const everything = JSON.stringify(logged.mock.calls);
+    expect(everything).not.toContain(PIXELS);
+    expect(everything).not.toContain("private/2026");
+    expect(everything).not.toContain("secret");
+  });
+
+  it("forwards a large upload unparsed for one unit, and refuses one over 8 MB", async () => {
+    const env = makeEnv({ DAILY_LIMIT: "2" });
+    const big = JSON.stringify({ image: `data:image/png;base64,${"A".repeat(200_000)}`, labels: ["a", "b"] });
+    expect(units("POST", "/", big)).toBe(1);
+    const calls = runpod(DONE);
+    const response = await call(env, "/", { method: "POST", body: big });
+    expect(response.headers.get("X-RateLimit-Remaining")).toBe("1");
+    expect(JSON.parse(calls[0].init?.body as string).input.http.body).toBe(big);
+    const none = runpod();
+    const huge = JSON.stringify({ image: `data:image/png;base64,${"A".repeat(8 * 1024 * 1024)}`, labels: ["a", "b"] });
+    const refused = await call(env, "/", { method: "POST", body: huge });
+    expect(refused.status).toBe(413);
+    expect(await detail(refused)).toContain("its URL");
+    expect(none).toHaveLength(0);
+    // Refused before metering: the last unit is still there.
+    runpod(DONE);
+    expect((await call(env, "/a,b/hi")).headers.get("X-RateLimit-Remaining")).toBe("0");
+  });
+});
+
 describe("private request logs", () => {
   it("captures a payload before the backend responds, then links its completion", async () => {
     const logged = vi.spyOn(console, "log").mockImplementation(() => undefined);

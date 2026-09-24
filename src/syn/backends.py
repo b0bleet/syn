@@ -201,6 +201,40 @@ def _load_causal_lm(model: str, config, dtype, attn, extra):
     return loaded
 
 
+def _load_multimodal(model: str, dtype, attn, extra):
+    """The whole Qwen3.5 checkpoint, vision encoder included, for requests with an image.
+
+    Given only token ids, its forward runs the same language model the text-only class loads, so
+    text prompts score exactly as they would without images enabled.
+    """
+    from transformers import AutoConfig
+
+    config = AutoConfig.from_pretrained(model, trust_remote_code=False, **extra)
+    if getattr(config, "model_type", None) != "qwen3_5":
+        raise ValueError("SYN_IMAGES needs a multimodal Qwen3.5 checkpoint")
+    try:
+        from transformers import Qwen3_5ForConditionalGeneration
+    except ImportError as exc:
+        raise RuntimeError("Qwen3.5 needs transformers>=5.17") from exc
+    loaded, info = Qwen3_5ForConditionalGeneration.from_pretrained(
+        model,
+        config=config,
+        dtype=dtype,
+        trust_remote_code=False,
+        attn_implementation=attn,
+        output_loading_info=True,
+        **extra,
+    )
+    dropped = {
+        key: info.get(key)
+        for key in ("missing_keys", "mismatched_keys", "error_msgs")
+        if info.get(key)
+    }
+    if dropped:
+        raise RuntimeError(f"Qwen3.5 weights did not load completely: {dropped}")
+    return loaded
+
+
 def revision_commit(config) -> str | None:
     commit = getattr(config, "_commit_hash", None)
     return commit if isinstance(commit, str) and commit else None
@@ -237,7 +271,11 @@ class LocalBackend:
         if settings.readout in ("pmi", "pointer"):
             attn = "sdpa" if device == "cuda" else "eager"
         model, extra = pretrained_call(settings.model, settings.revision)
-        self.model = _load_causal_lm(model, config, self.dtype, attn, extra).to(device).eval()
+        if settings.images:
+            loaded = _load_multimodal(model, self.dtype, attn, extra)
+        else:
+            loaded = _load_causal_lm(model, config, self.dtype, attn, extra)
+        self.model = loaded.to(device).eval()
 
     def _chunks(self, prompts: list[PreparedPrompt]) -> list[list[int]]:
         """Group prompt indices so that rows x padded width stays within the token budget.
@@ -269,10 +307,26 @@ class LocalBackend:
         torch = self.torch
         queued = time.perf_counter()
         rows: list[list[float] | None] = [None] * len(prompts)
-        chunks = self._chunks(prompts)
+        text = [i for i, prompt in enumerate(prompts) if prompt.vision is None]
+        chunks = [[text[i] for i in chunk] for chunk in self._chunks([prompts[i] for i in text])]
         with self.lock:
             acquired = time.perf_counter()
             with torch.inference_mode():
+                # One at a time, unpadded: the model derives an image's 2D patch positions itself.
+                for index, prompt in enumerate(prompts):
+                    if prompt.vision is None:
+                        continue
+                    vision = {k: v.to(self.device) for k, v in prompt.vision.items()}
+                    if "pixel_values" in vision:
+                        vision["pixel_values"] = vision["pixel_values"].to(self.dtype)
+                    output = self.model(
+                        input_ids=torch.tensor([prompt.input_ids], device=self.device),
+                        use_cache=False,
+                        logits_to_keep=1,
+                        **vision,
+                    )
+                    log_probs = output.logits[0, -1].float().log_softmax(dim=-1)
+                    rows[index] = log_probs[prompt.label_token_ids].cpu().tolist()
                 for chunk in chunks:
                     width = max(len(prompts[i].input_ids) for i in chunk)
                     ids = torch.zeros((len(chunk), width), dtype=torch.long, device=self.device)

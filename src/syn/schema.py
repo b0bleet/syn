@@ -3,6 +3,10 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 Text = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+# An https URL or a data:image/...;base64 URI; see syn.images for what is accepted.
+ImageReference = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1), Field(max_length=14_000_000)
+]
 AbstainReason = Literal["low_probability", "low_confidence", "ordering_disagreement"]
 
 
@@ -16,15 +20,21 @@ class Option(StrictModel):
 
 
 class ScoreRequest(StrictModel):
-    context: Annotated[Text, Field(max_length=200_000)]
+    # Optional when there is an image: the image is then the whole state.
+    context: Annotated[str, StringConstraints(strip_whitespace=True), Field(max_length=200_000)] = (
+        ""
+    )
     question: Annotated[Text, Field(max_length=8192)]
     criteria: Annotated[str, Field(max_length=8192)] = ""
     options: list[Option] = Field(min_length=2, max_length=26)
+    image: ImageReference | None = None
 
     @model_validator(mode="after")
     def unique_ids(self):
         if len({o.id for o in self.options}) != len(self.options):
             raise ValueError("Option IDs must be unique")
+        if not self.context and self.image is None:
+            raise ValueError("Give a context, an image, or both")
         return self
 
 
@@ -78,21 +88,31 @@ class ScoreResponse(StrictModel):
 
 
 class ClassifyRequest(StrictModel):
-    """Body for POST /: one text or a batch, and the labels to pick from."""
+    """Body for POST /: one text or a batch, or one image, and the labels to pick from.
+
+    With an image, `input` is optional text about it (a caption, say); a batch of texts can't be
+    combined with an image.
+    """
 
     input: (
         Annotated[Text, Field(max_length=200_000)]
         | Annotated[
             list[Annotated[Text, Field(max_length=200_000)]], Field(min_length=1, max_length=32)
         ]
-    )
+        | None
+    ) = None
     labels: list[Annotated[Text, Field(max_length=128)]] = Field(min_length=2, max_length=26)
     question: Annotated[str, Field(max_length=8192)] | None = None
+    image: ImageReference | None = None
 
     @model_validator(mode="after")
     def unique_labels(self):
         if len(set(self.labels)) != len(self.labels):
             raise ValueError("Labels must be unique")
+        if self.input is None and self.image is None:
+            raise ValueError("Give an input text, an image, or both")
+        if self.image is not None and isinstance(self.input, list):
+            raise ValueError("An image takes one optional input text, not a batch")
         return self
 
 
