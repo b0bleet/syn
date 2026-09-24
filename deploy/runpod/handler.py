@@ -57,7 +57,7 @@ try:
     scorer = Scorer(settings, builder, backend, commit, head, head_sha, head_temperature, pointer)
     app = create_app(settings, scorer)
     startup_error = None
-except Exception:  # noqa: BLE001 - any failure must reach the job, not kill the worker
+except BaseException:  # noqa: BLE001 - any failure, native panics included, must reach the job
     # A worker that dies here restarts in a loop, RunPod keeps none of its output, and jobs wait
     # in the queue until they time out. Stay up instead and fail every job with the cause, so it
     # shows in the job's status and the Cloudflare Worker's logs, and callers fail fast.
