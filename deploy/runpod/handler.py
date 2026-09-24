@@ -23,35 +23,46 @@ the job's error, and backend failures raise, which marks the job FAILED.
 from __future__ import annotations
 
 import asyncio
+import sys
+import traceback
 
 import runpod
-from transformers import AutoTokenizer
 
-from syn.api import create_app, load_head, load_pointer
-from syn.backends import LocalBackend, resolve_config, revision_commit
-from syn.config import Settings
-from syn.http_job import serve
-from syn.prompt import PromptBuilder, PromptError
-from syn.schema import ScoreRequest
-from syn.scoring import Scorer
-from syn.shorthand import ShorthandError, build_request, parse
+try:
+    from transformers import AutoTokenizer
 
-settings = Settings()
-config = resolve_config(settings)
-commit = revision_commit(config)
-tokenizer = AutoTokenizer.from_pretrained(
-    settings.model, revision=settings.revision, trust_remote_code=False
-)
-builder = PromptBuilder(tokenizer, settings.max_prompt_tokens, settings.prompt_format)
-backend = LocalBackend(settings, config)
-head, head_sha, head_temperature, pointer = None, None, None, None
-if settings.readout == "head":
-    head, head_sha, head_config = load_head(settings, config, commit)
-    head_temperature = head_config.get("temperature")
-elif settings.readout == "pointer":
-    pointer = load_pointer(settings, config, tokenizer)
-scorer = Scorer(settings, builder, backend, commit, head, head_sha, head_temperature, pointer)
-app = create_app(settings, scorer)
+    from syn.api import create_app, load_head, load_pointer
+    from syn.backends import LocalBackend, resolve_config, revision_commit
+    from syn.config import Settings
+    from syn.http_job import serve
+    from syn.prompt import PromptBuilder, PromptError
+    from syn.schema import ScoreRequest
+    from syn.scoring import Scorer
+    from syn.shorthand import ShorthandError, build_request, parse
+
+    settings = Settings()
+    config = resolve_config(settings)
+    commit = revision_commit(config)
+    tokenizer = AutoTokenizer.from_pretrained(
+        settings.model, revision=settings.revision, trust_remote_code=False
+    )
+    builder = PromptBuilder(tokenizer, settings.max_prompt_tokens, settings.prompt_format)
+    backend = LocalBackend(settings, config)
+    head, head_sha, head_temperature, pointer = None, None, None, None
+    if settings.readout == "head":
+        head, head_sha, head_config = load_head(settings, config, commit)
+        head_temperature = head_config.get("temperature")
+    elif settings.readout == "pointer":
+        pointer = load_pointer(settings, config, tokenizer)
+    scorer = Scorer(settings, builder, backend, commit, head, head_sha, head_temperature, pointer)
+    app = create_app(settings, scorer)
+    startup_error = None
+except Exception:  # noqa: BLE001 - any failure must reach the job, not kill the worker
+    # A worker that dies here restarts in a loop, RunPod keeps none of its output, and jobs wait
+    # in the queue until they time out. Stay up instead and fail every job with the cause, so it
+    # shows in the job's status and the Cloudflare Worker's logs, and callers fail fast.
+    startup_error = traceback.format_exc()
+    print(startup_error, file=sys.stderr, flush=True)
 
 
 def score(payload: dict) -> dict:
@@ -71,6 +82,8 @@ def score(payload: dict) -> dict:
 async def handler(job: dict) -> dict:
     # RunPod awaits this inside its own event loop, so it must be async; blocking scoring runs
     # in a thread.
+    if startup_error:
+        raise RuntimeError(f"Worker failed to start:\n{startup_error[-4000:]}")
     payload = job.get("input") or {}
     if "http" in payload:
         return await serve(app, payload["http"])
