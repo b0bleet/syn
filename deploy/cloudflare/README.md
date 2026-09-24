@@ -1,9 +1,11 @@
 # Cloudflare Worker
 
 The public front door: a web page, and a free API with daily limits. It holds no API logic.
-It meters the request, sends it to the RunPod endpoint as the job input
-`{"http": {method, path, headers, body}}`, polls through GPU cold starts, and returns the
-status, headers, and body the Python app produced on the GPU. Every route (`/<labels>/<text>`,
+It meters the request and sends it to the always-on GPU pod (`POD_URL`, see below). When the
+pod is unset, down, or failing, it sends the request to the RunPod serverless endpoint instead,
+as the job input `{"http": {method, path, headers, body}}`, and polls through GPU cold starts.
+Either way it returns the status, headers, and body the Python app produced on the GPU. Every
+route (`/<labels>/<text>`,
 `/?labels=&text=`, `POST /`, `/v1/score`, `/v1/systemone`, `/v1/models`) therefore behaves
 exactly as `syn serve` does locally.
 
@@ -23,7 +25,15 @@ exactly as `syn serve` does locally.
   in the `Quota` Durable Object and delete themselves at the end of the day.
 - **Keys**: bearer keys in `API_KEYS` skip both limits. Any other key is treated as the free
   tier, so clients that require a key (typesafe-sdk) work with `api_key="free"`.
-- `/health` reports RunPod worker counts, uncounted and without waking a GPU.
+- **Always-on pod**: an on-demand community-cloud pod runs `syn serve` behind `SYN_API_KEY`
+  (`scripts/runpod_serve.py` creates it). It costs about a quarter of an always-on serverless
+  worker and answers in well under a second, so the serverless endpoint can scale to zero and
+  only takes calls when the pod can't: unreachable, slower than `POD_TIMEOUT_SECONDS` (20),
+  a server error, a refused key, or a non-JSON error from RunPod's proxy while the pod is
+  stopped or starting. Secrets: `POD_URL` (`https://<pod id>-8765.proxy.runpod.net`) and
+  `POD_API_KEY`. Without `POD_URL`, every call goes to the serverless endpoint.
+- `/health` reports whether the pod is up and the RunPod worker counts, uncounted and without
+  waking a GPU. It stays `ready` while the pod alone can answer.
 - **Statistics**: every API call writes one data point to the `syn_api_calls` Analytics Engine
   dataset: endpoint, status, free or keyed, source (`playground`, another `website` and its
   host, or `direct`), client kind (curl, python, typesafe-sdk, browser, ...), country, texts

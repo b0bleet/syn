@@ -995,6 +995,87 @@ describe("public statistics page", () => {
   });
 });
 
+describe("always-on pod", () => {
+  const POD = "https://pod1-8765.proxy.example";
+  const podEnv = (overrides: Partial<Env> = {}) =>
+    makeEnv({ POD_URL: `${POD}/`, POD_API_KEY: "pod-secret", ...overrides });
+
+  /** Stub the pod and RunPod separately: each answers its own fetches in order. */
+  function backends(pod: (object | Response | Error)[], serverless: object[] = []) {
+    const calls: { url: string; init?: RequestInit }[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        calls.push({ url, init });
+        if (!url.startsWith(POD)) return Response.json(serverless.shift() ?? {});
+        const reply = pod.shift() ?? {};
+        if (reply instanceof Error) throw reply;
+        return reply instanceof Response ? reply : Response.json(reply);
+      }),
+    );
+    return calls;
+  }
+
+  it("answers from the pod with its key and the app's headers, without a RunPod job", async () => {
+    const answer = new Response("spam\n", {
+      headers: { "content-type": "text/plain", "x-syn-selected": "spam", server: "proxy", "set-cookie": "a=b" },
+    });
+    const calls = backends([answer]);
+    const response = await call(podEnv(), "/spam,ham/Win+a+free+iPhone?verbose=1", { key: "free" });
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("spam\n");
+    expect(response.headers.get("x-syn-selected")).toBe("spam");
+    expect(response.headers.get("server")).toBeNull();
+    expect(response.headers.get("set-cookie")).toBeNull();
+    expect(response.headers.get("X-RateLimit-Remaining")).toBe("2");
+    expect(calls.map((c) => c.url)).toEqual([`${POD}/spam,ham/Win+a+free+iPhone?verbose=1`]);
+    // The caller's own key never reaches the pod; the Worker's pod key does.
+    expect(new Headers(calls[0].init?.headers).get("Authorization")).toBe("Bearer pod-secret");
+    expect(calls[0].init?.body).toBeNull();
+  });
+
+  it("forwards POST bodies and passes the app's own client errors through", async () => {
+    const rejected = Response.json({ detail: "Need 2 to 26 labels, got 1" }, { status: 422 });
+    const calls = backends([rejected]);
+    const body = JSON.stringify({ input: "hi", labels: ["a"] });
+    const response = await call(podEnv(), "/", { method: "POST", body, headers: { "Content-Type": "application/json" } });
+    expect(response.status).toBe(422);
+    expect(await detail(response)).toContain("got 1");
+    expect(calls).toHaveLength(1);
+    expect(calls[0].init?.body).toBe(body);
+  });
+
+  it("falls back to the serverless endpoint when the pod is down, failing, or refuses the key", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    for (const failure of [
+      new TypeError("connection refused"),
+      new Response("bad gateway", { status: 502 }),
+      Response.json({ detail: "Missing or invalid bearer token" }, { status: 401 }),
+      new Response("<html>pod not found</html>", { status: 404, headers: { "content-type": "text/html" } }),
+      new Response(null, { status: 404 }),
+    ]) {
+      const calls = backends([failure], [DONE]);
+      const response = await call(podEnv(), "/a,b/hi");
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe("spam\n");
+      expect(calls.map((c) => c.url)).toEqual([`${POD}/a,b/hi`, `${RUNPOD}/runsync`]);
+    }
+  });
+
+  it("reports the pod in /health, and stays ready on the pod alone", async () => {
+    const workers = { workers: { idle: 0 }, jobs: { inQueue: 0 } };
+    backends([{ status: "ok" }], [workers]);
+    expect(await (await call(podEnv(), "/health")).json()).toEqual({ status: "ready", pod: "up", ...workers });
+    backends([new Error("down")], [workers]);
+    expect(await (await call(podEnv(), "/health")).json()).toEqual({ status: "ready", pod: "down", ...workers });
+    vi.stubGlobal("fetch", vi.fn(async (url: string) =>
+      url.startsWith(POD) ? Response.json({ status: "ok" }) : new Response("down", { status: 500 })));
+    const podOnly = await call(podEnv(), "/health");
+    expect(podOnly.status).toBe(200);
+    expect(await podOnly.json()).toEqual({ status: "ready", pod: "up", runpod: 500 });
+  });
+});
+
 describe("health", () => {
   it("reports RunPod worker counts without a key, a job, or a charge", async () => {
     const calls = runpod({ workers: { idle: 1, running: 0 }, jobs: { inQueue: 0 } });

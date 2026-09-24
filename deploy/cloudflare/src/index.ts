@@ -1,14 +1,17 @@
 /**
  * Public API and web page for syn on Cloudflare Workers.
  *
- * Holds no API logic. It meters the request, wraps it as the RunPod job input
- * {"http": {method, path, headers, body}}, waits for the GPU worker (polling through cold
- * starts), and returns the response the Python app produced there.
+ * Holds no API logic. It meters the request and sends it to the always-on GPU pod (POD_URL)
+ * running the same Python app. When there is no pod, or it is down or failing, it wraps the
+ * request as the RunPod job input {"http": {method, path, headers, body}} for the serverless
+ * endpoint instead, waits for a worker (polling through cold starts), and returns the response
+ * the app produced there.
  *
  * Free for everyone: requests without a known key are counted per client IP per UTC day, and
  * against a global daily cap that bounds GPU spend. Keys listed in API_KEYS skip both. `/` is the
  * page in public/, and its files (icons, preview image, robots.txt) are served as they are;
- * neither is counted or reaches a GPU. /health reports RunPod worker counts without waking a GPU.
+ * neither is counted or reaches a GPU. /health reports the pod and RunPod worker counts without
+ * waking a GPU.
  * Every API call is recorded, without its content, in the STATS dataset and today's LIVE counts,
  * after its answer is sent; /stats shows both publicly.
  * REQUEST_LOGS additionally records request content in private Cloudflare Workers Logs.
@@ -44,6 +47,12 @@ export interface Env extends StatsEnv {
   POLL_SECONDS?: string;
   /** Defaults to RunPod; override only to test against a local stand-in. */
   RUNPOD_API_BASE?: string;
+  /** Secret: base URL of an always-on GPU pod running `syn serve`, tried before the endpoint. */
+  POD_URL?: string;
+  /** Secret: the pod's SYN_API_KEY. */
+  POD_API_KEY?: string;
+  /** How long the pod may take before the call goes to the serverless endpoint instead. */
+  POD_TIMEOUT_SECONDS?: string;
   /** Analytics Engine dataset with one data point per API call, shown at /stats. */
   STATS?: AnalyticsEngineDataset;
   /** Today's counts, live, and the shared copy of the /stats tables. */
@@ -297,7 +306,7 @@ async function api(request: Request, env: Env, url: URL, body: string | null): P
     body,
   };
   try {
-    const job = await runJob(env, { http });
+    const job = (await podJob(env, http)) ?? (await runJob(env, { http }));
     const output = job.output;
     if (!isHttpOutput(output)) throw new JobError("GPU worker returned no HTTP response", 502);
     // The app failed on our side (its backend, not the request): the caller pays nothing.
@@ -481,6 +490,47 @@ function endpoint(env: Env): string {
   return `${env.RUNPOD_API_BASE ?? "https://api.runpod.ai/v2"}/${env.RUNPOD_ENDPOINT_ID}`;
 }
 
+/**
+ * The app's answer from the always-on pod, shaped like a finished job, or null when the pod can't
+ * answer and the serverless endpoint should: no pod configured, unreachable, too slow, a server
+ * error, the pod refusing our key, or an error page from RunPod's proxy in front of it.
+ */
+async function podJob(
+  env: Env,
+  http: { method: string; path: string; headers: Record<string, string>; body: string | null },
+): Promise<Job | null> {
+  if (!env.POD_URL) return null;
+  const started = Date.now();
+  let response: Response;
+  try {
+    response = await fetch(`${env.POD_URL.replace(/\/+$/, "")}${http.path}`, {
+      method: http.method,
+      headers: { ...http.headers, Authorization: `Bearer ${env.POD_API_KEY ?? ""}` },
+      body: http.method === "GET" || http.method === "HEAD" ? null : http.body,
+      signal: AbortSignal.timeout(Number(env.POD_TIMEOUT_SECONDS ?? 20) * 1000),
+    });
+  } catch (error) {
+    console.error("Pod unreachable", error);
+    return null;
+  }
+  const type = response.headers.get("content-type") ?? "";
+  const status = response.status;
+  // The app's own errors are JSON; RunPod's proxy answers a stopped or starting pod with an
+  // empty 404 or an HTML page.
+  if (status >= 500 || status === 401 || status === 403 || (status >= 400 && !type.includes("json"))) {
+    // 401 or 403 here means POD_API_KEY does not match the pod's SYN_API_KEY.
+    console.error("Pod answered", status);
+    return null;
+  }
+  // The same headers the serverless handler returns (deploy/runpod, syn.http_job).
+  const headers: Record<string, string> = {};
+  response.headers.forEach((value, name) => {
+    if (name === "content-type" || name.startsWith("x-")) headers[name] = value;
+  });
+  const output: HttpOutput = { status, headers, body: await response.text() };
+  return { status: "COMPLETED", output, delayTime: 0, executionTime: Date.now() - started };
+}
+
 async function runJob(env: Env, input: unknown): Promise<Job> {
   const base = endpoint(env);
   const headers = {
@@ -533,12 +583,29 @@ async function runpod(pending: Promise<Response>): Promise<Job> {
 }
 
 async function health(env: Env): Promise<Response> {
-  const response = await fetch(`${endpoint(env)}/health`, {
-    headers: { Authorization: `Bearer ${env.RUNPOD_API_KEY}` },
-  }).catch(() => null);
-  if (!response?.ok) return json({ status: "degraded", runpod: response?.status ?? null }, 503);
+  const [response, pod] = await Promise.all([
+    fetch(`${endpoint(env)}/health`, {
+      headers: { Authorization: `Bearer ${env.RUNPOD_API_KEY}` },
+    }).catch(() => null),
+    podUp(env),
+  ]);
+  const podState = pod === null ? {} : { pod: pod ? "up" : "down" };
+  if (!response?.ok) {
+    // The pod alone can still answer every call.
+    const status = pod ? "ready" : "degraded";
+    return json({ status, ...podState, runpod: response?.status ?? null }, pod ? 200 : 503);
+  }
   const body = (await response.json()) as { workers?: unknown; jobs?: unknown };
-  return json({ status: "ready", workers: body.workers, jobs: body.jobs });
+  return json({ status: "ready", ...podState, workers: body.workers, jobs: body.jobs });
+}
+
+/** Whether the pod's app answers its open /health route; null when no pod is configured. */
+async function podUp(env: Env): Promise<boolean | null> {
+  if (!env.POD_URL) return null;
+  const response = await fetch(`${env.POD_URL.replace(/\/+$/, "")}/health`, {
+    signal: AbortSignal.timeout(5000),
+  }).catch(() => null);
+  return response?.ok === true && !(response.headers.get("content-type") ?? "").includes("text/html");
 }
 
 /**

@@ -151,8 +151,9 @@ suite scores. Evaluate an untouched transfer test only after all model selection
 - GitHub import: set the Dockerfile path to `deploy/runpod/Dockerfile` and the build
   context to the repo root. RunPod's scanner only looks for `runpod.serverless.start()`
   at the repo root, so it warns about `deploy/runpod/handler.py`; continue anyway.
-- Cold start = image pull + model load + weight download. Keep at least one worker warm,
-  or accept a few minutes on the first job.
+- Cold start = image pull + model load + weight download. The public API avoids it with an
+  always-on pod (`scripts/runpod_serve.py`, see `deploy/cloudflare/README.md`) and keeps this
+  endpoint at zero active workers as the fallback.
 - `readout=head` needs `SYN_HEAD_PATH` pointing at a checkpoint inside the image or the
   network volume, and the head must have been trained on the same backbone; the local
   heads were trained on 0.6B features and will not load against an 8B model.
