@@ -17,6 +17,11 @@ RunPod console → Serverless → New Endpoint:
 
 - **Image**: `<dockerhub-user>/syn-scorer`
 - **GPU**: 24 GB is enough for `Qwen/Qwen3.5-4B` in bfloat16. 48 GB for 14B, 80 GB for 32B.
+  Keep the serverless endpoint on RTX 4090 / A40 / RTX A6000. On 2026-09-24 its workers on
+  the 16 GB and 24 GB Ampere pools (RTX A4000, A4500, RTX 4000 Ada, RTX A5000) restarted
+  every few seconds and never took a job, with any image, on this endpoint and on a fresh one;
+  the same image took jobs at once on the larger cards. The always-on pod (see
+  `scripts/runpod_serve.py`) is not affected and runs fine on a community RTX A4500.
 - **Model** (Manage → Edit Endpoint): set it to the same value as `SYN_MODEL`, e.g.
   `Qwen/Qwen3.5-4B`. RunPod then caches the weights on the host at
   `/runpod-volume/huggingface-cache`, which is the image's `HF_HOME`, so workers load
