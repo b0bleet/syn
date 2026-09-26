@@ -88,6 +88,11 @@ textarea { height: clamp(130px, 23vh, 240px); min-height: 100px; resize: vertica
 button { background: #fff; border: 1px solid #000; border-radius: 0; padding: 8px 18px; cursor: pointer; box-shadow: none; }
 button:hover { background: #000; color: #fff; }
 button:disabled { cursor: wait; }
+.input-modes { display: flex; gap: 8px; margin-bottom: 20px; }
+.input-modes button { font-size: 12px; padding: 5px 12px; }
+.input-modes button[aria-pressed="true"] { background: #000; color: #fff; }
+.image-preview { display: block; width: 100%; height: 170px; object-fit: contain; margin-top: 12px; }
+.image-note { font-size: 11px; margin: 8px 0 0; }
 textarea:focus, input:focus, button:focus { outline: none; box-shadow: none; }
 .field:focus-within label { font-weight: bold; }
 .actions { display: flex; align-items: center; gap: 16px; }
@@ -152,7 +157,9 @@ pre { overflow: auto; border: 1px solid #000; padding: 16px; font-size: 12px; }
       <p class="switch">Using Jev? sifty answers the same System One API. It is open source and free, and you can host it yourself. <a href="#docs">Switch with one line</a></p>
       <div class="work">
         <div>
-          <div class="field"><label for="text">Text</label><textarea id="text" spellcheck="false">Congratulations! You have won a free iPhone. Click the link to claim your prize.</textarea></div>
+          <div class="input-modes" role="group" aria-label="Input type"><button id="text-mode" type="button" aria-pressed="true">Text</button><button id="image-mode" type="button" aria-pressed="false">Image</button></div>
+          <div class="field" id="image-field" hidden><label for="image-url">Public image URL</label><input id="image-url" type="url" placeholder="https://example.com/photo.jpg" spellcheck="false"><p class="image-note">Try an image example, or paste a public image URL.</p><img id="image-preview" class="image-preview" alt="Image to classify" referrerpolicy="no-referrer" hidden></div>
+          <div class="field" id="text-field"><label for="text">Text</label><textarea id="text" spellcheck="false">Congratulations! You have won a free iPhone. Click the link to claim your prize.</textarea></div>
           <div class="field"><label for="labels">Labels, separated by commas</label><input id="labels" value="spam, not spam" spellcheck="false"></div>
           <div class="actions"><button id="go">Classify</button><span class="shortcut">Ctrl / ⌘ + Enter</span></div>
           <p class="quota" id="quota">1,000 free units per IP per day.</p>
@@ -210,22 +217,53 @@ print(response.nouls["billing"].noul)</code></pre><button class="copy" data-copy
 <script>
   const $ = (id) => document.getElementById(id);
   const text = $("text"), labels = $("labels"), go = $("go"), result = $("result"), quota = $("quota");
+  const imageUrl = $("image-url"), imagePreview = $("image-preview");
+  let inputMode = "text";
+
+  function setMode(mode) {
+    if (go.disabled) return;
+    inputMode = mode;
+    $("text-field").hidden = mode !== "text";
+    $("image-field").hidden = mode !== "image";
+    $("text-mode").setAttribute("aria-pressed", String(mode === "text"));
+    $("image-mode").setAttribute("aria-pressed", String(mode === "image"));
+    show("empty", "Your result will appear here.");
+  }
+
+  function updatePreview() {
+    imagePreview.hidden = true;
+    imagePreview.removeAttribute("src");
+    try {
+      const url = new URL(imageUrl.value.trim());
+      if (!["https:", "http:"].includes(url.protocol)) return;
+      imagePreview.src = url.href;
+    } catch { /* An incomplete URL has no preview yet. */ }
+  }
+  imagePreview.onload = () => { imagePreview.hidden = false; };
+  imagePreview.onerror = () => { imagePreview.hidden = true; };
+  imageUrl.addEventListener("change", updatePreview);
+  $("text-mode").onclick = () => setMode("text");
+  $("image-mode").onclick = () => setMode("image");
 
   const examples = [
     ["Detect spam", "Congratulations! You have won a free iPhone. Click the link to claim your prize.", "spam, not spam"],
     ["Check sentiment", "The battery died after two days and support never replied.", "positive, negative, neutral"],
     ["Route a support ticket", "I was charged twice for my subscription this month.", "billing, technical issue, account access"],
+    ["Recognize an animal (image)", "https://upload.wikimedia.org/wikipedia/commons/3/3a/Cat03.jpg", "cat, dog, other", "image"],
   ];
-  for (const [name, input, options] of examples) {
+  for (const [name, input, options, mode = "text"] of examples) {
     const button = document.createElement("button");
     button.className = "example";
     button.textContent = name;
     button.onclick = () => {
       if (go.disabled) return;
-      text.value = input;
+      setMode(mode);
+      const field = mode === "image" ? imageUrl : text;
+      field.value = input;
+      if (mode === "image") updatePreview();
       labels.value = options;
       show("empty", "Example loaded. Click Classify to see the result.");
-      text.focus();
+      field.focus();
     };
     $("examples").append(button);
   }
@@ -254,7 +292,17 @@ print(response.nouls["billing"].noul)</code></pre><button class="copy" data-copy
   async function classify() {
     if (go.disabled) return;
     const list = labels.value.split(",").map((s) => s.trim()).filter(Boolean);
-    if (!text.value.trim()) return show("error", "Write some text to classify.");
+    const payload = { labels: list };
+    if (inputMode === "image") {
+      try {
+        const url = new URL(imageUrl.value.trim());
+        if (!["https:", "http:"].includes(url.protocol)) throw new Error("Invalid protocol");
+        payload.image = url.href;
+      } catch { return show("error", "Enter a public image URL beginning with https:// or http://."); }
+    } else {
+      if (!text.value.trim()) return show("error", "Write some text to classify.");
+      payload.input = text.value;
+    }
     if (list.length < 2 || list.length > 26) return show("error", "Give 2 to 26 labels, separated by commas.");
     go.disabled = true;
     show("status", "Scoring…");
@@ -264,7 +312,7 @@ print(response.nouls["billing"].noul)</code></pre><button class="copy" data-copy
       const response = await fetch("/", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ input: text.value, labels: list }),
+        body: JSON.stringify(payload),
       });
       showQuota(response);
       const body = await response.json().catch(() => ({}));
@@ -305,7 +353,9 @@ print(response.nouls["billing"].noul)</code></pre><button class="copy" data-copy
   }
 
   go.onclick = classify;
-  text.addEventListener("keydown", (e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") classify(); });
+  for (const field of [text, imageUrl, labels]) {
+    field.addEventListener("keydown", (e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") classify(); });
+  }
 
 
   function navigate() {
