@@ -1,7 +1,7 @@
 {
-  "name": "sifty: free text classification",
+  "name": "sifty: text and image classification",
   "short_name": "sifty",
-  "description": "Classify text with your own labels. Free, no account or API key.",
+  "description": "Classify text and recognize images with your own labels. Free, no account or API key.",
   "start_url": "/",
   "display": "browser",
   "background_color": "#ffffff",

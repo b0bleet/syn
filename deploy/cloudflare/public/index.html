@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>sifty: free text classification API with one URL</title>
-<meta name="description" content="Classify any text with your own labels using one URL. Free, open-source zero-shot API with a probability for every label, compatible with the Jev System One API. No training, no account, no API key.">
+<title>sifty: free text classification and image recognition API</title>
+<meta name="description" content="Classify text and recognize images with your own labels. Free, open-source zero-shot API with a probability for every label, compatible with the Jev System One API. No training, no account, no API key.">
 <link rel="canonical" href="https://sifty.dev/">
 <meta name="robots" content="index, follow, max-image-preview:large">
 <meta name="application-name" content="sifty">
@@ -17,8 +17,8 @@
 <meta property="og:site_name" content="sifty">
 <meta property="og:locale" content="en_US">
 <meta property="og:url" content="https://sifty.dev/">
-<meta property="og:title" content="sifty: Text in. Label out.">
-<meta property="og:description" content="Free text classification API. Send text and your own labels in one URL, get the label back. No account or API key.">
+<meta property="og:title" content="sifty: Text or image in. Label out.">
+<meta property="og:description" content="Free text classification and image recognition API. Send text or an image with your own labels, get the label back. No account or API key.">
 <meta property="og:image" content="https://sifty.dev/og.png">
 <meta property="og:image:type" content="image/png">
 <meta property="og:image:width" content="1200">
@@ -26,8 +26,8 @@
 <meta property="og:image:alt" content="sifty: Text in. Label out. curl sifty.dev/spam,not+spam/Win+a+free+iPhone answers spam.">
 
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="sifty: Text in. Label out.">
-<meta name="twitter:description" content="Free text classification API. Send text and your own labels in one URL, get the label back. No account or API key.">
+<meta name="twitter:title" content="sifty: Text or image in. Label out.">
+<meta name="twitter:description" content="Free text classification and image recognition API. Send text or an image with your own labels, get the label back. No account or API key.">
 <meta name="twitter:image" content="https://sifty.dev/og.png">
 <meta name="twitter:image:alt" content="sifty: Text in. Label out. curl sifty.dev/spam,not+spam/Win+a+free+iPhone answers spam.">
 
@@ -46,7 +46,7 @@
       "@id": "https://sifty.dev/#website",
       "url": "https://sifty.dev/",
       "name": "sifty",
-      "description": "Free text classification API with one URL.",
+      "description": "Free text classification and image recognition API.",
       "inLanguage": "en"
     },
     {
@@ -54,7 +54,7 @@
       "@id": "https://sifty.dev/#app",
       "name": "sifty",
       "url": "https://sifty.dev/",
-      "description": "Classify any text with your own labels using one URL. Free zero-shot API with a probability for every label. No training, no account, no API key.",
+      "description": "Classify text and recognize images with your own labels. Free zero-shot API with a probability for every label. No training, no account, no API key.",
       "image": "https://sifty.dev/og.png",
       "applicationCategory": "DeveloperApplication",
       "operatingSystem": "Any",
@@ -147,8 +147,8 @@ pre { overflow: auto; border: 1px solid #000; padding: 16px; font-size: 12px; }
   </header>
   <main>
     <section id="playground" aria-labelledby="heading">
-      <h1 id="heading">Text in. Label out.</h1>
-      <p class="description">Classify text with your own labels. Free. No account or API key.</p>
+      <h1 id="heading">Text or image in. Label out.</h1>
+      <p class="description">Classify text and recognize images with your own labels. Free. No account or API key.</p>
       <p class="switch">Using Jev? sifty answers the same System One API. It is open source and free, and you can host it yourself. <a href="#docs">Switch with one line</a></p>
       <div class="work">
         <div>
@@ -161,19 +161,19 @@ pre { overflow: auto; border: 1px solid #000; padding: 16px; font-size: 12px; }
           <h2 class="result-title">Result</h2>
           <div class="result" id="result" aria-live="polite" aria-atomic="true"><p class="empty">Your result will appear here.</p></div>
           <div class="examples" id="examples"><h2>Try an example</h2></div>
-          <div class="api-example"><h2>Or use the API</h2><code>curl <span class="origin">https://sifty.dev</span>/spam,not+spam/Win+a+free+iPhone</code><button class="copy" data-copy>Copy</button></div>
+          <div class="api-example"><h2>Or use the API</h2><code>curl <span class="origin">https://sifty.dev</span>/spam,not+spam/Win+a+free+iPhone</code><button class="copy" data-copy>Copy</button><p>For image recognition, send an image URL or upload with your labels. <a href="#docs">See the image API example</a>.</p></div>
         </div>
       </div>
     </section>
     <section id="docs" aria-labelledby="docs-title" hidden>
       <h1 id="docs-title">Using sifty</h1>
-      <p>Send text and labels. Get the most likely label back.</p>
+      <p>Send text or an image with your own labels. Get the most likely label back.</p>
       <h2>HTTP API</h2>
       <div class="block"><pre><code>curl <span class="origin">https://sifty.dev</span>/spam,not+spam/Win+a+free+iPhone</code></pre><button class="copy" data-copy>Copy</button></div>
       <p>Add <code>?verbose=1</code> for probabilities. Use POST for a batch:</p>
       <div class="block"><pre><code>curl <span class="origin">https://sifty.dev</span>/ -H 'Content-Type: application/json' \
   -d '{"input":["Win a free iPhone","Lunch at noon?"],"labels":["spam","not spam"]}'</code></pre><button class="copy" data-copy>Copy</button></div>
-      <h2>Images</h2>
+      <h2>Image recognition</h2>
       <p>Send an <code>image</code> instead of, or with, text: a public image URL, or a <code>data:image/…;base64,</code> upload of up to about 6 MB. The same labels, questions and answers apply.</p>
       <div class="block"><pre><code>curl <span class="origin">https://sifty.dev</span>/ -H 'Content-Type: application/json' \
   -d '{"image":"https://upload.wikimedia.org/wikipedia/commons/3/3a/Cat03.jpg","labels":["cat","dog","other"]}'</code></pre><button class="copy" data-copy>Copy</button></div>
