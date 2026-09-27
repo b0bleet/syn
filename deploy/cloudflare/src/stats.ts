@@ -40,15 +40,16 @@ const P50 = "quantileExactWeighted(0.5)(double2, _sample_interval) AS p50_ms";
 const P95 = "quantileExactWeighted(0.95)(double2, _sample_interval) AS p95_ms";
 const KEYED = "sumIf(_sample_interval, blob3 = 'key') AS keyed";
 const LIMITED = "sumIf(_sample_interval, blob2 = '429') AS limited";
+const NO_ACCOUNT = "sumIf(_sample_interval, blob2 = '401') AS unauthorized";
 const FAILED = "sumIf(_sample_interval, blob2 >= '500') AS failed";
 
 /** One query per section, over the last `days` days. */
 export function queries(days: number): Record<string, string> {
   const from = `FROM ${DATASET} WHERE timestamp > now() - INTERVAL '${days}' DAY`;
   return {
-    totals: `SELECT ${CALLS}, ${TEXTS}, ${KEYED}, ${LIMITED}, ${FAILED}, ${P50}, ${P95} ${from}`,
+    totals: `SELECT ${CALLS}, ${TEXTS}, ${KEYED}, ${NO_ACCOUNT}, ${LIMITED}, ${FAILED}, ${P50}, ${P95} ${from}`,
     days: `SELECT toStartOfDay(timestamp) AS day, ${CALLS}, ${TEXTS},
-             count(DISTINCT index1) AS users, ${KEYED}, ${LIMITED}, ${FAILED}, ${P50}, ${P95}
+             count(DISTINCT index1) AS users, ${KEYED}, ${NO_ACCOUNT}, ${LIMITED}, ${FAILED}, ${P50}, ${P95}
            ${from} GROUP BY day ORDER BY day DESC`,
     // Same window as the other sections. The chart groups bars when a day range is wider than
     // the drawing can show one bar per hour.
@@ -81,7 +82,7 @@ async function query(env: StatsEnv, sql: string): Promise<Row[]> {
   return (JSON.parse(text) as { data: Row[] }).data;
 }
 
-export async function statsPage(url: URL, live: DurableObjectStub<LiveStats>): Promise<Response> {
+export async function statsPage(url: URL, live: DurableObjectStub<LiveStats>, db?: D1Database): Promise<Response> {
   const asked = Number(url.searchParams.get("days"));
   const days = RANGES.includes(asked) ? asked : 7;
   // One cache entry per range, whatever else the query string holds.
@@ -89,14 +90,14 @@ export async function statsPage(url: URL, live: DurableObjectStub<LiveStats>): P
   const cache = typeof caches === "undefined" ? undefined : caches.default;
   const cached = await cache?.match(key);
   if (cached) return cached;
-  let body: string;
-  try {
-    const { today, tables } = await live.page(days);
-    body = main(days, today, tables);
-  } catch (error) {
-    console.error("Statistics unavailable", error);
-    body = `<main>${UNAVAILABLE}</main>`;
-  }
+  const [registrations, usage] = await Promise.all([
+    registrationStats(db, days),
+    live.page(days).then(({ today, tables }) => main(days, today, tables)).catch((error) => {
+      console.error("Statistics unavailable", error);
+      return UNAVAILABLE;
+    }),
+  ]);
+  const body = `<main>${registrations}${usage}</main>`;
   const response = new Response(page(days, body), {
     headers: {
       "content-type": "text/html; charset=utf-8",
@@ -105,6 +106,43 @@ export async function statsPage(url: URL, live: DurableObjectStub<LiveStats>): P
   });
   await cache?.put(key, response.clone());
   return response;
+}
+
+/** Public aggregates only: never read account identities, sessions, or key material. */
+export async function registrationStats(db: D1Database | undefined, days: number): Promise<string> {
+  if (!db) return "";
+  const now = Date.now();
+  const since = now - days * 86_400_000;
+  const today = Math.floor(now / 86_400_000) * 86_400_000;
+  try {
+    const [totals, daily] = await db.batch<Row>([
+      db.prepare(`SELECT COUNT(*) AS accounts,
+        COALESCE(SUM(emailVerified = 1), 0) AS verified,
+        COALESCE(SUM(emailVerified = 0), 0) AS pending,
+        COALESCE(SUM(createdAt >= ?), 0) AS today,
+        COALESCE(SUM(createdAt >= ?), 0) AS recent,
+        (SELECT COUNT(*) FROM api_key JOIN user AS owner ON owner.id = api_key.userId
+          WHERE owner.emailVerified = 1) AS keys FROM user`).bind(today, since),
+      db.prepare(`SELECT strftime('%Y-%m-%d', createdAt / 1000, 'unixepoch') AS day,
+        COUNT(*) AS registrations, SUM(emailVerified = 1) AS verified,
+        SUM(emailVerified = 0) AS pending FROM user WHERE createdAt >= ?
+        GROUP BY day ORDER BY day DESC`).bind(since),
+    ]);
+    const total = totals.results[0];
+    return `<h2>Registered accounts</h2>${tiles([
+      ["accounts in total", total.accounts],
+      ["email verified", total.verified],
+      ["awaiting verification", total.pending],
+      ["with an active API key", total.keys],
+      ["registered today (UTC)", total.today],
+      [`registered in last ${label(days)}`, total.recent],
+    ])}${section(`Registrations in last ${label(days)} (UTC)`, daily.results, "registrations", {
+      day: "registered on", registrations: "registrations", verified: "verified now", pending: "pending now",
+    })}<p class="intro">Verification status is current, grouped by registration date. API clients below are estimated from daily network identifiers, not registered accounts.</p>`;
+  } catch (error) {
+    console.error("Registration statistics unavailable", error);
+    return "<h2>Registered accounts</h2><p>Registration statistics are unavailable right now.</p>";
+  }
 }
 
 /** A range's tables, as LiveStats keeps them. Never throws: a failure is a message to show. */
@@ -134,14 +172,15 @@ function label(days: number): string {
 /** The part an open page swaps in when it refreshes: today's counts, then the range's tables. */
 function main(days: number, today: Today, tables: Tables): string {
   const updated = tables.ok ? `, updated ${new Date(tables.at).toISOString().slice(11, 16)} UTC` : "";
-  return `<main><h2>Today (UTC), live</h2>${tiles([
+  return `<h2>Today (UTC), live</h2>${tiles([
     ["calls", today.calls],
     ["texts classified", today.texts],
-    ["users", today.users],
+    ["estimated API clients", today.users],
     ["with an unlimited key", today.keyed],
+    ["without an account", today.unauthorized],
     ["hit the daily limit", today.limited],
     ["failed", today.failed],
-  ])}<h2>Last ${label(days)}${updated}</h2>${tables.body}</main>`;
+  ])}<h2>Last ${label(days)}${updated}</h2>${tables.body}`;
 }
 
 function tiles(values: [string, string | number | undefined][]): string {
@@ -156,6 +195,7 @@ function render(data: Record<string, Row[]>, days: number): string {
       ["calls", total.calls],
       ["texts classified", total.texts],
       ["with an unlimited key", total.keyed],
+      ["without an account", total.unauthorized],
       ["hit the daily limit", total.limited],
       ["failed", total.failed],
       ["ms median response", total.p50_ms],
@@ -167,8 +207,9 @@ function render(data: Record<string, Row[]>, days: number): string {
       day: "day",
       calls: "calls",
       texts: "texts",
-      users: "users",
+      users: "estimated clients",
       keyed: "with key",
+      unauthorized: "no account",
       limited: "limited",
       failed: "failed",
       p50_ms: "median ms",
@@ -337,9 +378,10 @@ function page(days: number, body: string): string {
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>sifty API statistics</title>
-<meta name="description" content="Live usage of the sifty free text classification API: calls, texts classified, countries, and response times.">
+<title>sifty statistics</title>
+<meta name="description" content="Sifty registrations, verified accounts, and API usage statistics.">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<script src="/page-ready.js"></script>
 <style>
 :root { font: 13px/1.6 "Lucida Console", Monaco, monospace; color: #000; background: #fff; }
 body { max-width: 1080px; margin: auto; padding: 32px 40px; }
@@ -368,8 +410,8 @@ td.bar span { position: absolute; left: 0; top: 5px; bottom: 5px; background: #0
 .none { font-size: 12px; }
 @media (max-width: 700px) { body { padding: 20px; } header { flex-direction: column; } td, th { white-space: normal; } }
 </style></head><body>
-<header><h1><a href="/">sifty</a> API statistics</h1><nav>${links}</nav></header>
-<p class="intro">Live usage of the free API: today's counts as they happen, tables every 10 minutes. This public page shows aggregate statistics only. Request contents are retained separately in private logs for 3 days.</p>
+<header><h1><a href="/">sifty</a> statistics</h1><nav>${links}</nav></header>
+<p class="intro">Registrations and API usage. Account totals and today's API counts refresh every 30 seconds; API tables every 10 minutes. This public page shows aggregate statistics only. Request contents are retained separately in private logs for 3 days.</p>
 ${body}
 <footer style="font-size:10px;margin-top:32px"><a href="/contact">Contact us</a> at <a href="mailto:emin@jolo.build">emin@jolo.build</a></footer>
 <div id="chart-tip" hidden></div>

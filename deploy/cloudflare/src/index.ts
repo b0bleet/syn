@@ -7,7 +7,7 @@
  * endpoint instead, waits for a worker (polling through cold starts), and returns the response
  * the app produced there.
  *
- * Free for everyone: requests without a known key are counted per client IP per UTC day, and
+ * Verified account requests are counted per client IP per UTC day, and
  * against a global daily cap that bounds GPU spend. Keys listed in API_KEYS skip both. `/` is the
  * page in public/, and its files (icons, preview image, robots.txt) are served as they are;
  * neither is counted or reaches a GPU. /health reports the pod and RunPod worker counts without
@@ -20,12 +20,16 @@
 import type { LiveStats } from "./live";
 import type { Quota } from "./quota";
 import { logRequest } from "./request-log";
+import { authenticated, type AuthEnv } from "./auth";
+import type { AuthService } from "./auth-service";
 import { type StatsEnv, statsPage } from "./stats";
 
 export { LiveStats } from "./live";
 export { Quota } from "./quota";
+export { AuthService } from "./auth-service";
 
-export interface Env extends StatsEnv {
+export interface Env extends StatsEnv, AuthEnv {
+  AUTH: DurableObjectNamespace<AuthService>;
   /** Secret: the RunPod serverless endpoint running deploy/runpod/handler.py. */
   RUNPOD_ENDPOINT_ID: string;
   /** Secret: the RunPod API key. */
@@ -96,6 +100,7 @@ interface Charge {
  * is an API call, so a file missing here would run a GPU job and cost the caller a unit.
  */
 export const STATIC_FILES = new Set([
+  "/page-ready.js",
   "/robots.txt",
   "/sitemap.xml",
   "/llms.txt",
@@ -139,6 +144,9 @@ class JobError extends Error {
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
+    if (url.pathname.startsWith("/api/auth/") || url.pathname === "/api/account" || url.pathname.startsWith("/api/account/")) {
+      return env.AUTH.get(env.AUTH.idFromName("accounts")).fetch(request);
+    }
     if (request.method === "OPTIONS") {
       return new Response(null, {
         status: 204,
@@ -157,15 +165,39 @@ export default {
     const reading = request.method === "GET" || request.method === "HEAD";
     // Cloudflare Assets canonicalizes contact.html to /contact, so handle both names before the
     // catch-all API route rather than treating the clean URL as a classification request.
-    if (reading && (url.pathname === "/contact" || url.pathname === "/contact.html")) {
-      return env.ASSETS.fetch(request);
+    if (reading && ["/contact", "/contact.html", "/account", "/account.html"].includes(url.pathname)) {
+      const response = await env.ASSETS.fetch(request);
+      if (!url.pathname.startsWith("/account")) return response;
+      const headers = new Headers(response.headers);
+      headers.set("Cache-Control", "no-store");
+      headers.set("Referrer-Policy", "no-referrer");
+      headers.set("X-Content-Type-Options", "nosniff");
+      headers.set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'; form-action 'self'");
+      return new Response(response.body, { status: response.status, headers });
     }
-    if (reading && url.pathname === "/stats") return statsPage(url, liveStats(env));
+    if (reading && url.pathname === "/stats") return statsPage(url, liveStats(env), env.AUTH_DB);
     if (reading && STATIC_FILES.has(url.pathname)) return env.ASSETS.fetch(request);
-    if (reading && url.pathname === "/" && !url.search && wantsPage(request)) {
+    // Ad click/UTM parameters belong to the landing page, not the classification API.
+    const landingParams = new Set(["utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term", "rdt_cid"]);
+    const landingQuery = [...url.searchParams.keys()].every((key) => landingParams.has(key));
+    if (reading && url.pathname === "/" && landingQuery && wantsPage(request)) {
       return env.ASSETS.fetch(request);
     }
     const started = Date.now();
+    if (env.AUTH_REQUIRED !== "false" && !await hasKey(request, env) && !await authenticated(request, env)) {
+      const call = {
+        response: withCors(json({ detail: "Register and verify your email at https://sifty.dev/account, then sign in or send your API key as Authorization: Bearer <key>." }, 401)),
+        units: 0,
+        keyed: false,
+      };
+      // Counted like any call, without its content, so /stats shows how many callers had no account.
+      ctx.waitUntil(
+        record(request, url, call, Date.now() - started, env).catch((error) =>
+          console.error("API call not recorded", error),
+        ),
+      );
+      return call.response;
+    }
     const size = Number(request.headers.get("Content-Length") ?? 0);
     if (size > MAX_BODY_BYTES) {
       return withCors(json({ detail: TOO_LARGE }, 413));
@@ -622,8 +654,8 @@ async function podUp(env: Env): Promise<boolean | null> {
 }
 
 /**
- * Whether the caller sent one of API_KEYS. Any other key counts as the free tier rather than an
- * error, so clients that insist on a key (typesafe-sdk) work with a placeholder like "free".
+ * Whether the caller sent one of the operator API_KEYS that bypass usage limits.
+ * Personal account keys are checked separately and remain subject to free-tier quotas.
  */
 async function hasKey(request: Request, env: Env): Promise<boolean> {
   const header = request.headers.get("Authorization") ?? "";

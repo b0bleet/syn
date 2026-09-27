@@ -19,6 +19,8 @@ export interface Today {
   keyed: number;
   limited: number;
   failed: number;
+  /** Calls turned away without an account or API key. */
+  unauthorized: number;
 }
 
 interface Saved extends Omit<Today, "users"> {
@@ -64,6 +66,7 @@ export class LiveStats extends DurableObject<StatsEnv> {
     today.texts += call.units;
     if (call.keyed) today.keyed += 1;
     if (call.status === 429) today.limited += 1;
+    if (call.status === 401) today.unauthorized = (today.unauthorized ?? 0) + 1;
     if (call.status >= 500) today.failed += 1;
     if (call.client !== "none") see(today, Number.parseInt(call.client.slice(0, 8), 16));
     await this.ctx.storage.put<Saved>("today", today);
@@ -73,7 +76,11 @@ export class LiveStats extends DurableObject<StatsEnv> {
   /** Everything the page shows for a range of `days`. */
   async page(days: number): Promise<{ today: Today; tables: Tables }> {
     const [{ ids, sketch, ...today }, tables] = await Promise.all([this.today(), this.tables(days)]);
-    return { today: { ...today, users: sketch ? estimate(sketch) : ids.length }, tables };
+    return {
+      // A day saved before registration was required has no such count.
+      today: { ...today, unauthorized: today.unauthorized ?? 0, users: sketch ? estimate(sketch) : ids.length },
+      tables,
+    };
   }
 
   /**
@@ -99,7 +106,7 @@ export class LiveStats extends DurableObject<StatsEnv> {
     const day = utcDay();
     const saved = await this.ctx.storage.get<Saved>("today");
     if (saved?.day === day) return saved;
-    return { day, calls: 0, texts: 0, keyed: 0, limited: 0, failed: 0, ids: [], sketch: null };
+    return { day, calls: 0, texts: 0, keyed: 0, limited: 0, failed: 0, unauthorized: 0, ids: [], sketch: null };
   }
 
   /** A range's tables, queried again once stale, and once however many ask at the same time. */

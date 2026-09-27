@@ -3,6 +3,8 @@
   "name": "syn",
   "main": "src/index.ts",
   "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "d1_databases": [{ "binding": "AUTH_DB", "database_name": "sifty-auth", "database_id": "767b67c5-d732-4a7f-a20a-422581d7ba18", "migrations_dir": "migrations" }],
   // Built-in private logs: 200,000 events/day, retained 3 days on Workers Free.
   // Receipt and completion events for classification API calls; omit automatic invocation logs.
   "observability": {
@@ -17,16 +19,20 @@
   "durable_objects": {
     "bindings": [
       { "name": "QUOTA", "class_name": "Quota" },
-      { "name": "LIVE", "class_name": "LiveStats" }
+      { "name": "LIVE", "class_name": "LiveStats" },
+      { "name": "AUTH", "class_name": "AuthService" }
     ]
   },
   // One data point per API call: how the API is used, never what is classified. Shown at /stats.
   "analytics_engine_datasets": [{ "binding": "STATS", "dataset": "syn_api_calls" }],
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["Quota"] },
-    { "tag": "v2", "new_sqlite_classes": ["LiveStats"] }
+    { "tag": "v2", "new_sqlite_classes": ["LiveStats"] },
+    { "tag": "v3", "new_sqlite_classes": ["AuthService"] }
   ],
   "vars": {
+    "AUTH_REQUIRED": "true",
+    "AUTH_BASE_URL": "https://sifty.dev",
     // No extra storage or paid service. Disable to stop collecting request contents.
     "REQUEST_LOGS": "true",
     // Free tier, in units per UTC day (one per request, or per text in a batch). The page in

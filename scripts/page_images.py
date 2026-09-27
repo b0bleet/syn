@@ -39,12 +39,13 @@ def preview() -> Image.Image:
     image.paste(icon(96), (80, 72))
     draw.text((200, 82), "sifty", font=font(64), fill="black")
     draw.text((80, 236), "Text in. Label out.", font=font(56), fill="black")
-    draw.text((80, 322), "Free text classification API. No key.", font=font(30), fill="black")
+    draw.text((80, 322), "Free classification. Verified accounts.", font=font(30), fill="black")
     draw.line([(80, 424), (1120, 424)], fill="black", width=2)
     draw.text(
-        (80, 452), "$ curl sifty.dev/spam,not+spam/Win+a+free+iPhone", font=font(26), fill="black"
+        (80, 452), "$ curl -H 'Authorization: Bearer …'", font=font(26), fill="black"
     )
-    draw.text((80, 500), "spam", font=font(26), fill="black")
+    draw.text((110, 495), "sifty.dev/spam,not+spam/Win+a+free+iPhone", font=font(26), fill="black")
+    draw.text((80, 542), "spam", font=font(26), fill="black")
     return image
 
 

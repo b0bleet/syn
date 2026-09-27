@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>sifty: free text classification and image recognition API</title>
-<meta name="description" content="Classify text and recognize images with your own labels. Free, open-source zero-shot API with a probability for every label, compatible with the Jev System One API. No training, no account, no API key.">
+<meta name="description" content="Classify text and recognize images with your own labels. Free, open-source zero-shot API with a probability for every label, compatible with the Jev System One API. No training. Free with a verified account.">
 <link rel="canonical" href="https://sifty.dev/">
 <meta name="robots" content="index, follow, max-image-preview:large">
 <meta name="application-name" content="sifty">
@@ -18,7 +18,7 @@
 <meta property="og:locale" content="en_US">
 <meta property="og:url" content="https://sifty.dev/">
 <meta property="og:title" content="sifty: Text or image in. Label out.">
-<meta property="og:description" content="Free text classification and image recognition API. Send text or an image with your own labels, get the label back. No account or API key.">
+<meta property="og:description" content="Free text classification and image recognition API. Send text or an image with your own labels, get the label back. Free with a verified account.">
 <meta property="og:image" content="https://sifty.dev/og.png">
 <meta property="og:image:type" content="image/png">
 <meta property="og:image:width" content="1200">
@@ -27,7 +27,7 @@
 
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="sifty: Text or image in. Label out.">
-<meta name="twitter:description" content="Free text classification and image recognition API. Send text or an image with your own labels, get the label back. No account or API key.">
+<meta name="twitter:description" content="Free text classification and image recognition API. Send text or an image with your own labels, get the label back. Free with a verified account.">
 <meta name="twitter:image" content="https://sifty.dev/og.png">
 <meta name="twitter:image:alt" content="sifty: Text in. Label out. curl sifty.dev/spam,not+spam/Win+a+free+iPhone answers spam.">
 
@@ -54,7 +54,7 @@
       "@id": "https://sifty.dev/#app",
       "name": "sifty",
       "url": "https://sifty.dev/",
-      "description": "Classify text and recognize images with your own labels. Free zero-shot API with a probability for every label. No training, no account, no API key.",
+      "description": "Classify text and recognize images with your own labels. Free zero-shot API with a probability for every label. No training. Free with a verified account.",
       "image": "https://sifty.dev/og.png",
       "applicationCategory": "DeveloperApplication",
       "operatingSystem": "Any",
@@ -65,6 +65,7 @@
   ]
 }
 </script>
+<script src="/page-ready.js"></script>
 <style>
 * { box-sizing: border-box; }
 :root { color-scheme: light; font: 14px/1.65 "Lucida Console", Monaco, monospace; color: #000; background: #fff; }
@@ -104,6 +105,7 @@ textarea:focus, input:focus, button:focus { outline: none; box-shadow: none; }
 .empty { font-size: 13px; }
 .answer { font-size: 26px; margin-bottom: 8px; }
 .meta { margin-bottom: 24px; }
+.saved { font-size: 12px; margin: 12px 0 0; }
 .row { display: grid; grid-template-columns: minmax(70px, 1fr) 1fr 52px; gap: 12px; align-items: center; font-size: 12px; margin: 12px 0; }
 .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .track { height: 8px; border: 1px solid #000; }
@@ -148,27 +150,28 @@ pre { overflow: auto; border: 1px solid #000; padding: 16px; font-size: 12px; }
 <div class="site">
   <header>
     <a class="logo" href="#">sifty</a>
-    <nav aria-label="Navigation"><a id="docs-link" href="#docs">Docs</a><a href="/stats">Stats</a><a href="https://github.com/b0bleet/syn">GitHub</a><a href="/contact">Contact</a></nav>
+    <nav aria-label="Navigation"><a id="docs-link" href="#docs">Docs</a><a href="/stats">Stats</a><a href="https://github.com/b0bleet/syn">GitHub</a><a href="/contact">Contact</a><a id="account-link" href="/account">Register / Sign in</a></nav>
   </header>
   <main>
     <section id="playground" aria-labelledby="heading">
       <h1 id="heading">Text or image in. Label out.</h1>
-      <p class="description">Classify text and recognize images with your own labels. Free. No account or API key.</p>
-      <p class="switch">Using Jev? sifty answers the same System One API. It is open source and free, and you can host it yourself. <a href="#docs">Switch with one line</a></p>
+      <p class="description">Classify text and recognize images with your own labels. Free with a verified account.</p>
+      <p class="switch">Using Jev? sifty answers the same System One API. It is open source and free, and you can host it yourself. <a href="#docs">Use your Sifty API key and switch the base URL</a></p>
       <div class="work">
         <div>
           <div class="input-modes" role="group" aria-label="Input type"><button id="text-mode" type="button" aria-pressed="true">Text</button><button id="image-mode" type="button" aria-pressed="false">Image</button></div>
           <div class="field" id="image-field" hidden><label for="image-url">Public image URL</label><input id="image-url" type="url" placeholder="https://example.com/photo.jpg" spellcheck="false"><p class="image-note">Try an image example, or paste a public image URL.</p><img id="image-preview" class="image-preview" alt="Image to classify" referrerpolicy="no-referrer" hidden></div>
           <div class="field" id="text-field"><label for="text">Text</label><textarea id="text" spellcheck="false">Congratulations! You have won a free iPhone. Click the link to claim your prize.</textarea></div>
           <div class="field"><label for="labels">Labels, separated by commas</label><input id="labels" value="spam, not spam" spellcheck="false"></div>
-          <div class="actions"><button id="go">Classify</button><span class="shortcut">Ctrl / ⌘ + Enter</span></div>
+          <div class="actions"><button id="go">Register to classify</button><span class="shortcut">Ctrl / ⌘ + Enter</span></div>
           <p class="quota" id="quota">1,000 free units per IP per day.</p>
         </div>
         <div class="output">
           <h2 class="result-title">Result</h2>
           <div class="result" id="result" aria-live="polite" aria-atomic="true"><p class="empty">Your result will appear here.</p></div>
+          <p class="saved" id="saved-note" hidden><a href="/account">Register free</a> to classify your own text and images: 1,000 units a day and an API key.</p>
           <div class="examples" id="examples"><h2>Try an example</h2></div>
-          <div class="api-example"><h2>Or use the API</h2><code>curl <span class="origin">https://sifty.dev</span>/spam,not+spam/Win+a+free+iPhone</code><button class="copy" data-copy>Copy</button><p>For image recognition, send an image URL or upload with your labels. <a href="#docs">See the image API example</a>.</p></div>
+          <div class="api-example"><h2>Or use the API</h2><code>curl -H 'Authorization: Bearer YOUR_SIFTY_API_KEY' <span class="origin">https://sifty.dev</span>/spam,not+spam/Win+a+free+iPhone</code><button class="copy" data-copy>Copy</button><p>For image recognition, send an image URL or upload with your labels. <a href="#docs">See the image API example</a>.</p></div>
         </div>
       </div>
     </section>
@@ -176,21 +179,22 @@ pre { overflow: auto; border: 1px solid #000; padding: 16px; font-size: 12px; }
       <h1 id="docs-title">Using sifty</h1>
       <p>Send text or an image with your own labels. Get the most likely label back.</p>
       <h2>HTTP API</h2>
-      <div class="block"><pre><code>curl <span class="origin">https://sifty.dev</span>/spam,not+spam/Win+a+free+iPhone</code></pre><button class="copy" data-copy>Copy</button></div>
+      <p><a href="/account">Register and verify your email</a>, then create an API key in your account. Send it as <code>Authorization: Bearer YOUR_SIFTY_API_KEY</code>. Keep it private.</p>
+      <div class="block"><pre><code>curl -H 'Authorization: Bearer YOUR_SIFTY_API_KEY' <span class="origin">https://sifty.dev</span>/spam,not+spam/Win+a+free+iPhone</code></pre><button class="copy" data-copy>Copy</button></div>
       <p>Add <code>?verbose=1</code> for probabilities. Use POST for a batch:</p>
-      <div class="block"><pre><code>curl <span class="origin">https://sifty.dev</span>/ -H 'Content-Type: application/json' \
+      <div class="block"><pre><code>curl -H 'Authorization: Bearer YOUR_SIFTY_API_KEY' <span class="origin">https://sifty.dev</span>/ -H 'Content-Type: application/json' \
   -d '{"input":["Win a free iPhone","Lunch at noon?"],"labels":["spam","not spam"]}'</code></pre><button class="copy" data-copy>Copy</button></div>
       <h2>Image recognition</h2>
       <p>Send an <code>image</code> instead of, or with, text: a public image URL, or a <code>data:image/…;base64,</code> upload of up to about 6 MB. The same labels, questions and answers apply.</p>
-      <div class="block"><pre><code>curl <span class="origin">https://sifty.dev</span>/ -H 'Content-Type: application/json' \
+      <div class="block"><pre><code>curl -H 'Authorization: Bearer YOUR_SIFTY_API_KEY' <span class="origin">https://sifty.dev</span>/ -H 'Content-Type: application/json' \
   -d '{"image":"https://upload.wikimedia.org/wikipedia/commons/3/3a/Cat03.jpg","labels":["cat","dog","other"]}'</code></pre><button class="copy" data-copy>Copy</button></div>
       <p>Ask a question with <code>"question"</code>, add text about the image with <code>"input"</code>, or use <code>?labels=cat,dog&amp;image=&lt;url&gt;</code> in a GET. System One requests take a top-level <code>"image"</code> that every question is asked about. Images are never stored: private logs keep only whether it was a URL or an upload, the URL's host, and its size.</p>
       <h2>Python, and coming from Jev</h2>
-      <p>sifty answers the System One API (<code>POST /v1/systemone</code>), so <a href="https://pypi.org/project/typesafe-sdk/">typesafe-sdk</a> works unchanged. Code written for Jev only needs a different <code>base_url</code>; Noul, Choice and Score questions are all supported.</p>
+      <p>sifty answers the System One API (<code>POST /v1/systemone</code>), so <a href="https://pypi.org/project/typesafe-sdk/">typesafe-sdk</a> works unchanged. Code written for Jev needs your Sifty API key and a different <code>base_url</code>; Noul, Choice and Score questions are all supported.</p>
       <div class="block"><pre><code>from typesafe_sdk import Noul, TypeSafeClient
 
 client = TypeSafeClient(
-    api_key="free",
+    api_key="YOUR_SIFTY_API_KEY",
     base_url="<span class="origin">https://sifty.dev</span>",
     timeout=120,
 )
@@ -210,10 +214,81 @@ print(response.nouls["billing"].noul)</code></pre><button class="copy" data-copy
   </main>
   <footer>
     <p>Powered by Qwen3.5-4B. Predictions can be wrong. Requests and results are retained privately for 3 days. Images are never stored. Please don’t send sensitive data.</p>
+    <p id="ad-measurement-note" hidden>For visits from Reddit ads, we use the Reddit Pixel to measure visits, verified sign-ups, and successful trials. Classification inputs and results are not included in these events. <a href="https://www.reddit.com/policies/privacy-policy">Reddit privacy policy</a>.</p>
     <p><a href="/contact">Contact us</a> at <a href="mailto:emin@jolo.build">emin@jolo.build</a></p>
   </footer>
 </div>
 <noscript><p>JavaScript is needed for the playground. You can use the API directly at https://sifty.dev/spam,not+spam/Win+a+free+iPhone</p></noscript>
+<script id="reddit-ad-measurement">
+  // Only Reddit ad visitors and verified accounts created from those visits are measured.
+  window.trackClassificationCompleted = () => {};
+  window.trackVerifiedSignUp = async () => {};
+  (() => {
+    if (location.hostname !== "sifty.dev" || navigator.globalPrivacyControl || navigator.doNotTrack === "1") return;
+    const sourceKey = "sifty.reddit-ad-visit";
+    const completedKey = "sifty.reddit-classification-completed";
+    let fromAd = new URLSearchParams(location.search).get("utm_source") === "reddit";
+    let completed = false;
+    let ready;
+    let signupPending = false;
+    try {
+      fromAd = fromAd || sessionStorage.getItem(sourceKey) === "1";
+      if (fromAd) sessionStorage.setItem(sourceKey, "1");
+      completed = sessionStorage.getItem(completedKey) === "1";
+    } catch {}
+    function initialize() {
+      if (ready) return ready;
+      document.getElementById("ad-measurement-note").hidden = false;
+      const rdt = window.rdt = window.rdt || function () {
+        rdt.sendEvent ? rdt.sendEvent.apply(rdt, arguments) : rdt.callQueue.push(arguments);
+      };
+      rdt.callQueue = rdt.callQueue || [];
+      const pixel = document.createElement("script");
+      pixel.src = "https://www.redditstatic.com/ads/pixel.js?pixel_id=a2_jr6emnbb46ad";
+      pixel.async = true;
+      ready = new Promise(resolve => { pixel.onload = () => resolve(true); pixel.onerror = () => resolve(false); });
+      document.head.append(pixel);
+      rdt("init", "a2_jr6emnbb46ad");
+      rdt("track", "PageVisit");
+      return ready;
+    }
+    if (fromAd) initialize();
+    window.trackVerifiedSignUp = async eligible => {
+      if (!eligible || signupPending) return;
+      signupPending = true;
+      try {
+        // Eligibility comes from our authenticated server response, not the URL or form button.
+        if (!await initialize()) return;
+        const response = await fetch("/api/account/signup-conversion", {
+          method: "POST", headers: {"Content-Type":"application/json"}, body: "{}",
+        });
+        if (!response.ok) return;
+        const claim = await response.json();
+        if (claim.report && typeof claim.conversionId === "string" && claim.conversionId) {
+          window.rdt("track", "SignUp", { conversionId: claim.conversionId });
+        }
+      } catch { /* Tracking must never interrupt sign-in or classification. */ }
+    };
+    window.trackClassificationCompleted = () => {
+      if (!ready || completed) return;
+      try {
+        window.rdt("track", "Custom", { customEventName: "ClassificationCompleted" });
+        completed = true;
+        try { sessionStorage.setItem(completedKey, "1"); } catch {}
+      } catch {}
+    };
+  })();
+</script>
+<!-- Examples and their saved results, shown to visitors before they register. The page never
+     calls the API for them. Refresh the results with scripts/example_results.py. -->
+<script id="examples-data" type="application/json">
+[
+  {"name": "Detect spam", "input": "Congratulations! You have won a free iPhone. Click the link to claim your prize.", "labels": "spam, not spam"},
+  {"name": "Check sentiment", "input": "The battery died after two days and support never replied.", "labels": "positive, negative, neutral"},
+  {"name": "Route a support ticket", "input": "I was charged twice for my subscription this month.", "labels": "billing, technical issue, account access"},
+  {"name": "Recognize an animal (image)", "input": "https://upload.wikimedia.org/wikipedia/commons/3/3a/Cat03.jpg", "labels": "cat, dog, other", "mode": "image"}
+]
+</script>
 <script>
   const $ = (id) => document.getElementById(id);
   const text = $("text"), labels = $("labels"), go = $("go"), result = $("result"), quota = $("quota");
@@ -245,13 +320,15 @@ print(response.nouls["billing"].noul)</code></pre><button class="copy" data-copy
   $("text-mode").onclick = () => setMode("text");
   $("image-mode").onclick = () => setMode("image");
 
-  const examples = [
-    ["Detect spam", "Congratulations! You have won a free iPhone. Click the link to claim your prize.", "spam, not spam"],
-    ["Check sentiment", "The battery died after two days and support never replied.", "positive, negative, neutral"],
-    ["Route a support ticket", "I was charged twice for my subscription this month.", "billing, technical issue, account access"],
-    ["Recognize an animal (image)", "https://upload.wikimedia.org/wikipedia/commons/3/3a/Cat03.jpg", "cat, dog, other", "image"],
-  ];
-  for (const [name, input, options, mode = "text"] of examples) {
+  const examples = JSON.parse($("examples-data").textContent);
+  let signedIn = false;
+  // Before registering, an example shows its saved result instead of calling the API.
+  function showExample(example) {
+    if (!signedIn && example.result) renderSaved(example.result);
+    else show("empty", signedIn ? "Example loaded. Click Classify to see the result." : "Example loaded. Register to classify it.");
+  }
+  for (const example of examples) {
+    const { name, input, labels: options, mode = "text" } = example;
     const button = document.createElement("button");
     button.className = "example";
     button.textContent = name;
@@ -262,10 +339,16 @@ print(response.nouls["billing"].noul)</code></pre><button class="copy" data-copy
       field.value = input;
       if (mode === "image") updatePreview();
       labels.value = options;
-      show("empty", "Example loaded. Click Classify to see the result.");
+      showExample(example);
       field.focus();
     };
     $("examples").append(button);
+  }
+  // A saved result no longer matches once the visitor edits the fields.
+  for (const field of [text, imageUrl, labels]) {
+    field.addEventListener("input", () => {
+      if (!$("saved-note").hidden) show("empty", "Register to classify your own text and images.");
+    });
   }
 
   for (const el of document.querySelectorAll(".origin")) el.textContent = location.origin;
@@ -280,7 +363,10 @@ print(response.nouls["billing"].noul)</code></pre><button class="copy" data-copy
   }
 
   function show(className, message) {
-    result.replaceChildren(Object.assign(document.createElement("p"), { className, textContent: message }));
+    const p = Object.assign(document.createElement("p"), { className, textContent: message });
+    result.replaceChildren(p);
+    $("saved-note").hidden = true;
+    return p;
   }
 
   function showQuota(response) {
@@ -289,7 +375,28 @@ print(response.nouls["billing"].noul)</code></pre><button class="copy" data-copy
     if (left !== null) quota.textContent = `${Number(left).toLocaleString()} of ${Number(limit).toLocaleString()} free units left today`;
   }
 
+  const accountReady = fetch("/api/account", {cache:"no-store", signal:AbortSignal.timeout(10000)}).then(async response => {
+    if (response.ok) {
+      const account = await response.json();
+      window.trackVerifiedSignUp(account.signupConversionEligible);
+      signedIn = true;
+      document.getElementById("account-link").textContent = "Account";
+      go.textContent = "Classify";
+      if (location.hash === "#welcome") {
+        history.replaceState(null, "", "/");
+        const note = show("success", "Email verified. You’re signed in: click Classify, or try an example. ");
+        note.append(Object.assign(document.createElement("a"), { href: "/account", textContent: "Create an API key" }), " for scripts and SDKs.");
+      }
+    } else if (response.status !== 401) throw new Error("Account unavailable");
+    // The text box starts with the first example, so show its saved result.
+    else if (examples[0].result) renderSaved(examples[0].result);
+  }).catch(() => {
+    go.disabled = true;
+    show("error", "Could not load your account. Reload the page to try again.");
+  });
+  window.siftyPage?.wait(accountReady);
   async function classify() {
+    if (!signedIn) { location.assign("/account"); return; }
     if (go.disabled) return;
     const list = labels.value.split(",").map((s) => s.trim()).filter(Boolean);
     const payload = { labels: list };
@@ -314,6 +421,7 @@ print(response.nouls["billing"].noul)</code></pre><button class="copy" data-copy
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
+      if (response.status === 401) { location.assign("/account?mode=login"); return; }
       showQuota(response);
       const body = await response.json().catch(() => ({}));
       if (!response.ok) {
@@ -321,6 +429,7 @@ print(response.nouls["billing"].noul)</code></pre><button class="copy" data-copy
         return show("error", detail || `The request failed (${response.status}).`);
       }
       render(body.results[0], performance.now() - started);
+      window.trackClassificationCompleted();
     } catch {
       show("error", "Could not reach the API. Check your connection and try again.");
     } finally {
@@ -329,13 +438,18 @@ print(response.nouls["billing"].noul)</code></pre><button class="copy" data-copy
     }
   }
 
+  function renderSaved(r) {
+    render(r, null);
+    $("saved-note").hidden = false;
+  }
+
   function render(r, ms) {
     const answer = document.createElement("p");
     answer.className = "answer";
     answer.textContent = r.label ?? "No clear answer";
     const meta = document.createElement("p");
     meta.className = "meta";
-    meta.textContent = `confidence ${r.confidence.toFixed(2)} · ${Math.round(ms).toLocaleString()} ms round trip`;
+    meta.textContent = `confidence ${r.confidence.toFixed(2)} · ${ms === null ? "saved example result" : `${Math.round(ms).toLocaleString()} ms round trip`}`;
     const rows = Object.entries(r.scores).sort((a, b) => b[1] - a[1]).map(([name, p]) => {
       const row = document.createElement("div");
       row.className = "row";
@@ -350,6 +464,7 @@ print(response.nouls["billing"].noul)</code></pre><button class="copy" data-copy
       return row;
     });
     result.replaceChildren(answer, meta, ...rows);
+    $("saved-note").hidden = true;
   }
 
   go.onclick = classify;

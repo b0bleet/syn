@@ -17,14 +17,13 @@ exactly as `syn serve` does locally.
   other path runs a GPU job. `robots.txt` keeps crawlers to the page and these files.
   `scripts/page_images.py` redraws the icons and preview image. CORS is open, so other sites can
   call the API too.
-- **Free tier**: requests without a key are counted per client IP (IPv6 by /64, stored only as
+- **Free tier**: verified users with a session or personal API key are counted per client IP (IPv6 by /64, stored only as
   a hash) per UTC day, and against a global daily cap that bounds GPU spend. One unit per
   request; a batch counts each text, a System One call each question. Responses carry
   `X-RateLimit-Limit`, `X-RateLimit-Remaining`, and `X-RateLimit-Reset`; over the limit is a
   `429` with `Retry-After`. Units are refunded when the failure is on our side. Counters live
   in the `Quota` Durable Object and delete themselves at the end of the day.
-- **Keys**: bearer keys in `API_KEYS` skip both limits. Any other key is treated as the free
-  tier, so clients that require a key (typesafe-sdk) work with `api_key="free"`.
+- **Keys**: operator bearer keys in `API_KEYS` skip both limits. Verified users create a personal key at `/account`; personal keys retain IP and global limits. Missing/unknown keys are rejected before classification logging or GPU work. Local self-hosted deployments can explicitly set `AUTH_REQUIRED=false` for anonymous access.
 - **Always-on pod**: an on-demand community-cloud pod runs `syn serve` behind `SYN_API_KEY`
   (`scripts/runpod_serve.py` creates it). It costs about a quarter of an always-on serverless
   worker and answers in well under a second, so the serverless endpoint can scale to zero and
@@ -77,7 +76,7 @@ becomes a preview marked `truncated`; bodies over 128,000 characters are omitted
 Malformed JSON is marked `invalid_json`. These limits affect logs only, never the API payload.
 
 Workers Free includes **200,000 log events per account per day, retained for 3 days**. This setup
-adds no paid subscription, KV, D1, or log export service. Invocation logs are disabled to avoid
+adds no paid subscription, KV, or log export service. Account storage uses a separate D1 database. Invocation logs are disabled to avoid
 duplicate events and automatic raw-URL capture; errors still produce logs. The free allowance
 is shared across the account, and collection can stop at platform limits. The 20,000-unit API
 cap does not cover refused requests, keyed traffic, or other Workers. A **Last 24 hours** filter
@@ -90,8 +89,53 @@ to Cloudflare's retention. Only requests after deployment will have these struct
 
 ## Statistics
 
-`/stats` is a public page, linked from the site. At the top are today's counts (UTC), live:
-calls, texts, distinct users, keyed calls, `429`s, and failures. Below are tables for the last 24
+### Page rendering
+
+All HTML pages load `public/page-ready.js` before their styles and content. It keeps
+the page behind a loading message until initial data requests settle, the window
+load event fires, fonts are ready, and eager images have decoded (or failed).
+The homepage registers its account request; account pages register account and
+provider requests. Stats gets its data on the server before returning HTML, while
+Contact needs no initial API request. API failures render an error state; slow
+assets offer a reload action after 15 seconds. Without JavaScript, the HTML remains
+visible. Bootstrap scripts and styles must load first to request data and control
+visibility; this delays presentation rather than delaying all asset downloads.
+
+### Reddit ad trial measurement
+
+The homepage loads Reddit Pixel `a2_jr6emnbb46ad` only on `sifty.dev` for visits
+tagged `utm_source=reddit` (remembered in session storage), or for a pending verified
+account created from such a visit. It records `PageVisit`
+and the custom event `ClassificationCompleted` after a successful playground result,
+once per browser-tab session. The standard `SignUp` event is emitted after a new
+ad-sourced account verifies its email and signs in to the playground. The signup
+source is recorded only at account creation; direct accounts and duplicate signup
+submissions cannot become new ad signups. A server-side atomic claim prevents
+repeat sign-ins or multiple tabs from counting the account twice. Each claimed
+signup gets a random UUID stored in D1 and sent as the Pixel's `conversionId`.
+This is an event identifier, not an account identifier. Conversions API is not
+configured; if added, it must reuse this stored ID for the same signup. Eligibility lasts
+seven days. The pixel must load before claiming the event; blocked pixels do not
+consume eligibility. The claim is not an acknowledgement of delivery: network
+failures after claiming can still lose an event. No email, password, account ID,
+or other advanced matching identifier is sent in `SignUp`. The account and reset
+pages do not load third-party tracking scripts. Text and image trials use the same event; API calls
+outside the playground are not attributed. The event contains no classification
+text, image URL, labels, or result, and no advanced matching identifiers are supplied.
+The pixel itself receives normal browser attribution data. Global Privacy Control
+and Do Not Track disable it. If session storage is blocked, deduplication lasts only
+until reload; ad blockers can prevent reporting. The footer discloses this measurement
+to ad visitors. Use a landing URL such as
+`https://sifty.dev/?utm_source=reddit&utm_medium=paid_social&utm_campaign=us_developer_trials`.
+
+`/stats` is a public page, linked from the site. It shows aggregate registered accounts,
+verified/pending accounts, active personal-key holders, today's registrations, and registrations
+by day in the selected range. Verification status is current, grouped by signup date, not
+verification date. No account identities or key material are queried or published. These D1
+aggregates share the page's 30-second cache and fail independently of API usage statistics.
+Next are today's API counts (UTC), live: calls, texts, estimated clients (daily network
+identifiers, not registered accounts), unlimited-key calls, `401`s from callers without an account
+or key, `429`s, and failures. Below are tables for the last 24
 hours, 7, 30, or 90 days: totals, then per day (the same counts plus median and p95 latency),
 endpoints, sources and clients, countries, status codes, and GPU time with cold starts. Endpoints
 are the app's own routes; any other path is named by its shape, and calling websites are recorded
@@ -151,3 +195,62 @@ npm test          # vitest, RunPod and the Durable Objects stubbed
 npm run check     # tsc
 npx wrangler dev  # local; RUNPOD_API_BASE in .dev.vars points it at a stand-in
 ```
+
+## Registration and email verification
+
+The hosted service requires a verified account, using Better Auth with its standard scrypt
+password hashing, seven-day HttpOnly secure cookie sessions, and Cloudflare D1 (`AUTH_DB`).
+Email verification is required before password sign-in. The verification link signs the visitor
+in once and returns to `/account?verified=1`, which forwards to the playground (`/#welcome`); a
+link that was already used signs no one in. Resend sends verification and password-reset links from the existing
+`contact@send.sifty.dev` sender. Links expire after one hour. The UI provides resend, reset,
+sign-out, and API key creation/replacement/revocation. Eight-character passwords are required.
+Password resets revoke existing sessions and the personal API key. Personal keys are random
+256-bit tokens, stored only as SHA-256 digests, do not expire, and keep the normal
+IP/global usage limits. Operator `API_KEYS` remain a separate privileged bypass.
+
+Password hashing runs in the `AuthService` Durable Object, which has a sufficient CPU
+allowance without lowering password-hash strength; authentication requests are serialized
+to bound scrypt memory use. The Worker forwards `/api/auth/*` and `/api/account*` there.
+
+Auth routes run before request logging; no passwords, cookies, tokens, emails or auth bodies
+are included in classification logs. The account page disables third-party scripts, sends
+`no-store` and `no-referrer`, and strips password-reset tokens from the address bar. Account
+records persist until removed; users can request deletion through the contact page. Better
+Auth stores session IP/user-agent metadata for account security.
+
+Authentication uses database-backed request limits plus a Durable Object limit of 30
+account mutations per IP per ten-minute window. Outgoing auth mail is limited to five per
+recipient per hour and 100 globally per UTC day. The existing contact form has separate
+limits. Registration discourages anonymous abuse but is not proof of a human.
+
+Deployment prerequisites (set secrets securely, never commit them):
+
+```sh
+npx wrangler d1 migrations apply sifty-auth --remote
+npx wrangler secret put BETTER_AUTH_SECRET # random >=32-byte secret
+# Existing RESEND_API_KEY is reused. AUTH_BASE_URL=https://sifty.dev is in wrangler.jsonc.
+npm run check
+npm test
+npx wrangler deploy
+```
+
+GitHub sign-in turns on once both `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` are set; the
+UI hides it otherwise. Create an OAuth App (GitHub → Settings → Developer settings → OAuth Apps)
+with homepage `https://sifty.dev` and the exact callback
+`https://sifty.dev/api/auth/callback/github`, then:
+
+```sh
+npx wrangler secret put GITHUB_CLIENT_ID
+npx wrangler secret put GITHUB_CLIENT_SECRET
+```
+
+Account linking is disabled; no repository scope is requested.
+
+Before registering, visitors who click a playground example see its saved result, stored in the
+page's `examples-data` block; the page does not call the API for them. Refresh those results with
+`SIFTY_API_KEY=sifty_... python3 scripts/example_results.py` from the repository root.
+
+Tests exercise the real auth handlers against local D1, with email delivery mocked; they
+cover verification, sign-in rejection, CSRF checks, session/key revocation, password reset
+replay, and rate limits, plus the existing classification and Reddit tracking tests.

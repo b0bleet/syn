@@ -52,6 +52,7 @@ function namespace<T>(make: (state: DurableObjectState) => T) {
 
 function makeEnv(overrides: Partial<Env> = {}): Env {
   const env = {
+    AUTH_REQUIRED: "false",
     RUNPOD_ENDPOINT_ID: "ep1",
     RUNPOD_API_KEY: "rp-secret",
     API_KEYS: "key-a, key-b",
@@ -326,10 +327,16 @@ describe("page and CORS", () => {
     expect(await (await call(env, "/", { headers: bot })).text()).toBe("<html>page</html>");
     expect((await call(env, "/", { method: "HEAD", headers: bot })).status).toBe(200);
     expect(calls).toHaveLength(0);
-    // curl gets the app's usage text, and a query is always an API call.
+    // Ad-tagged browser visits still get the page without invoking the GPU.
+    expect(await (await call(env, "/?utm_source=reddit&utm_medium=paid_social&utm_campaign=trial&rdt_cid=test", {
+      headers: { Accept: "text/html" },
+    })).text()).toBe("<html>page</html>");
+    expect(calls).toHaveLength(0);
+    // curl gets the app's usage text; classification queries remain API calls.
     await call(env, "/", { headers: { Accept: "*/*", "User-Agent": "curl/8.7.1" } });
     await call(env, "/?labels=a,b&text=hi", { headers: { Accept: "text/html" } });
-    expect(calls).toHaveLength(2);
+    await call(env, "/?labels=a,b&text=hi&utm_source=reddit", { headers: { Accept: "text/html" } });
+    expect(calls).toHaveLength(3);
   });
 
   it("serves the page's files without a GPU job or a charge", async () => {
@@ -872,7 +879,8 @@ describe("public statistics page", () => {
     const html = await (await call(env, "/stats")).text();
     expect(html).toContain(
       "<h2>Today (UTC), live</h2><div class=\"tiles\"><div><b>4</b>calls</div><div><b>5</b>texts classified</div>" +
-        "<div><b>2</b>users</div><div><b>1</b>with an unlimited key</div><div><b>1</b>hit the daily limit</div>" +
+        "<div><b>2</b>estimated API clients</div><div><b>1</b>with an unlimited key</div><div><b>0</b>without an account</div>" +
+        "<div><b>1</b>hit the daily limit</div>" +
         "<div><b>0</b>failed</div></div>",
     );
     expect(html).toMatch(/<h2>Last 7 days, updated \d\d:\d\d UTC<\/h2>/);
@@ -883,6 +891,23 @@ describe("public statistics page", () => {
     const again = cloudflareSql();
     expect(await (await call(env, "/stats")).text()).toContain("<b>5</b>calls");
     expect(again).toHaveLength(0);
+  });
+
+  it("counts callers turned away without an account, without charging them or calling a GPU", async () => {
+    const { points, dataset } = statsSink();
+    // No AUTH_DB: nobody can be signed in, so every call without an operator key is turned away.
+    const env = makeEnv({ ...connected, STATS: dataset, AUTH_REQUIRED: "true" });
+    const gpu = vi.fn();
+    vi.stubGlobal("fetch", gpu);
+    expect((await call(env, "/spam,ham/hello")).status).toBe(401);
+    expect((await call(env, "/", { method: "POST", body: '{"input":"x","labels":["a","b"]}' })).status).toBe(401);
+    expect(gpu).not.toHaveBeenCalled();
+    expect(points.map((point) => [point.blobs?.[1], point.doubles?.[0]])).toEqual([["401", 0], ["401", 0]]);
+    vi.unstubAllGlobals();
+    cloudflareSql();
+    const html = await (await call(env, "/stats")).text();
+    expect(html).toContain("<div><b>2</b>calls</div><div><b>0</b>texts classified</div>");
+    expect(html).toContain("<div><b>2</b>without an account</div>");
   });
 
   it("saves each call as one small write, keeps it through a restart, and starts over each day", async () => {
