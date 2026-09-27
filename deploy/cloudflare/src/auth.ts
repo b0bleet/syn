@@ -3,6 +3,7 @@ import { drizzleAdapter } from "@better-auth/drizzle-adapter";
 import { drizzle } from "drizzle-orm/d1";
 import * as schema from "./auth-schema";
 import type { Quota } from "./quota";
+import { savedSource } from "./source";
 
 export interface AuthEnv {
   AUTH_DB?: D1Database;
@@ -16,7 +17,8 @@ export interface AuthEnv {
   QUOTA: DurableObjectNamespace<Quota>;
 }
 
-export function createAuth(env: AuthEnv, ctx?: Pick<ExecutionContext, "waitUntil">, redditAdSignup = false) {
+/** `source` is the channel a new account is counted under on /stats (see ./source). */
+export function createAuth(env: AuthEnv, ctx?: Pick<ExecutionContext, "waitUntil">, source: string | null = null) {
   if (!env.AUTH_DB || !env.BETTER_AUTH_SECRET) throw new Error("Account service is not configured");
   const send = async (email: string, url: string, reset: boolean) => {
     if (!env.RESEND_API_KEY) throw new Error("Account email is not configured");
@@ -43,9 +45,10 @@ export function createAuth(env: AuthEnv, ctx?: Pick<ExecutionContext, "waitUntil
     secret: env.BETTER_AUTH_SECRET,
     database: drizzleAdapter(drizzle(env.AUTH_DB), { provider: "sqlite", schema, transaction: false }),
     user: { additionalFields: {
-      redditAdSignup: { type: "boolean", defaultValue: false, input: false, returned: false },
+      signupSource: { type: "string", required: false, input: false, returned: false },
     } },
-    databaseHooks: { user: { create: { before: async (user) => ({ data: { ...user, redditAdSignup } }) } } },
+    // Email sign-up and a first GitHub sign-in both create the user here.
+    databaseHooks: { user: { create: { before: async (user) => ({ data: { ...user, signupSource: source } }) } } },
     emailAndPassword: {
       enabled: true,
       minPasswordLength: 8,
@@ -116,10 +119,7 @@ export async function authRoute(request: Request, env: AuthEnv, ctx: Pick<Execut
       return privateJson({ message: "Too many attempts. Please try again in 10 minutes." }, 429);
     }
   }
-  const fromReddit = url.pathname === "/api/auth/sign-up/email" && request.method === "POST"
-    && request.headers.get("X-Sifty-Reddit-Visit") === "1" && request.headers.get("Sec-GPC") !== "1"
-    && request.headers.get("DNT") !== "1";
-  const auth = createAuth(env, ctx, fromReddit);
+  const auth = createAuth(env, ctx, savedSource(request));
   if (url.pathname.startsWith("/api/auth/")) {
     const response = await auth.handler(request);
     const headers = new Headers(response.headers);
@@ -133,17 +133,7 @@ export async function authRoute(request: Request, env: AuthEnv, ctx: Pick<Execut
   if (url.pathname === "/api/account" && request.method === "GET") {
     const key = await env.AUTH_DB.prepare("SELECT suffix FROM api_key WHERE userId = ?")
       .bind(userId).first();
-    const signup = await env.AUTH_DB.prepare("SELECT id FROM user WHERE id = ? AND redditAdSignup = 1 AND redditSignupReported = 0 AND createdAt > ?")
-      .bind(userId, Date.now() - 7 * 86400_000).first();
-    return privateJson({ email: session.user.email, key, signupConversionEligible: Boolean(signup) });
-  }
-  if (url.pathname === "/api/account/signup-conversion" && request.method === "POST") {
-    if (request.headers.get("Sec-GPC") === "1" || request.headers.get("DNT") === "1") return privateJson({ report: false });
-    // Atomic claim: reloads, multiple tabs and repeat logins cannot count a second signup.
-    // Persist an opaque event ID so a future CAPI copy can use the same ID as the Pixel.
-    const claimed = await env.AUTH_DB.prepare("UPDATE user SET redditSignupReported = 1, redditSignupConversionId = COALESCE(redditSignupConversionId, ?) WHERE id = ? AND emailVerified = 1 AND redditAdSignup = 1 AND redditSignupReported = 0 AND createdAt > ? RETURNING redditSignupConversionId")
-      .bind(crypto.randomUUID(), userId, Date.now() - 7 * 86400_000).first<{ redditSignupConversionId: string }>();
-    return privateJson(claimed ? { report: true, conversionId: claimed.redditSignupConversionId } : { report: false });
+    return privateJson({ email: session.user.email, key });
   }
   if (url.pathname === "/api/account/key" && request.method === "POST") {
     const raw = `sifty_${Array.from(crypto.getRandomValues(new Uint8Array(32)), (b) => b.toString(16).padStart(2, "0")).join("")}`;
@@ -159,20 +149,35 @@ export async function authRoute(request: Request, env: AuthEnv, ctx: Pick<Execut
   return privateJson({ message: "Not found." }, 404);
 }
 
-/** Normal account keys stay subject to the same IP and global quota as browser sessions. */
-export async function authenticated(request: Request, env: AuthEnv): Promise<boolean> {
-  if (!env.AUTH_DB || !env.BETTER_AUTH_SECRET) return false;
+/**
+ * The verified account making an API call, by personal key or playground session, or null.
+ * Normal account keys stay subject to the same IP and global quota as browser sessions.
+ */
+export async function caller(request: Request, env: AuthEnv): Promise<string | null> {
+  if (!env.AUTH_DB || !env.BETTER_AUTH_SECRET) return null;
   const bearer = request.headers.get("Authorization");
   if (bearer) {
     const match = /^Bearer (sifty_[0-9a-f]{64})$/i.exec(bearer);
-    if (!match) return false;
-    return Boolean(await env.AUTH_DB.prepare("SELECT api_key.userId FROM api_key JOIN user ON user.id = api_key.userId WHERE digest = ? AND user.emailVerified = 1")
-      .bind(await digest(match[1])).first());
+    if (!match) return null;
+    const row = await env.AUTH_DB.prepare("SELECT api_key.userId FROM api_key JOIN user ON user.id = api_key.userId WHERE digest = ? AND user.emailVerified = 1")
+      .bind(await digest(match[1])).first<{ userId: string }>();
+    return row?.userId ?? null;
   }
   // Cookie authentication is only for the same-origin JSON playground, not cross-site GETs.
   if (request.method !== "POST" || request.headers.get("Origin") !== (env.AUTH_BASE_URL ?? new URL(request.url).origin)
-    || !request.headers.get("Content-Type")?.startsWith("application/json")) return false;
-  return Boolean((await createAuth(env).api.getSession({ headers: request.headers }))?.user.emailVerified);
+    || !request.headers.get("Content-Type")?.startsWith("application/json")) return null;
+  const session = await createAuth(env).api.getSession({ headers: request.headers });
+  return session?.user.emailVerified ? session.user.id : null;
+}
+
+export async function authenticated(request: Request, env: AuthEnv): Promise<boolean> {
+  return (await caller(request, env)) !== null;
+}
+
+/** Mark an account's first answered API call. Later calls match no row and write nothing. */
+export async function firstCall(env: AuthEnv, userId: string): Promise<void> {
+  await env.AUTH_DB?.prepare("UPDATE user SET firstCallAt = ? WHERE id = ? AND firstCallAt IS NULL")
+    .bind(Date.now(), userId).run();
 }
 
 function privateJson(value: unknown, status = 200): Response {

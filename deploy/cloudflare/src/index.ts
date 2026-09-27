@@ -20,8 +20,9 @@
 import type { LiveStats } from "./live";
 import type { Quota } from "./quota";
 import { logRequest } from "./request-log";
-import { authenticated, type AuthEnv } from "./auth";
+import { caller, firstCall, type AuthEnv } from "./auth";
 import type { AuthService } from "./auth-service";
+import { rememberSource } from "./source";
 import { type StatsEnv, statsPage } from "./stats";
 
 export { LiveStats } from "./live";
@@ -166,7 +167,7 @@ export default {
     // Cloudflare Assets canonicalizes contact.html to /contact, so handle both names before the
     // catch-all API route rather than treating the clean URL as a classification request.
     if (reading && ["/contact", "/contact.html", "/account", "/account.html"].includes(url.pathname)) {
-      const response = await env.ASSETS.fetch(request);
+      const response = rememberSource(request, await env.ASSETS.fetch(request));
       if (!url.pathname.startsWith("/account")) return response;
       const headers = new Headers(response.headers);
       headers.set("Cache-Control", "no-store");
@@ -175,16 +176,19 @@ export default {
       headers.set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'; form-action 'self'");
       return new Response(response.body, { status: response.status, headers });
     }
-    if (reading && url.pathname === "/stats") return statsPage(url, liveStats(env), env.AUTH_DB);
+    if (reading && url.pathname === "/stats") return rememberSource(request, await statsPage(url, liveStats(env), env.AUTH_DB));
     if (reading && STATIC_FILES.has(url.pathname)) return env.ASSETS.fetch(request);
     // Ad click/UTM parameters belong to the landing page, not the classification API.
     const landingParams = new Set(["utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term", "rdt_cid"]);
     const landingQuery = [...url.searchParams.keys()].every((key) => landingParams.has(key));
     if (reading && url.pathname === "/" && landingQuery && wantsPage(request)) {
-      return env.ASSETS.fetch(request);
+      return rememberSource(request, await env.ASSETS.fetch(request));
     }
     const started = Date.now();
-    if (env.AUTH_REQUIRED !== "false" && !await hasKey(request, env) && !await authenticated(request, env)) {
+    const operator = await hasKey(request, env);
+    // The signed-in account, if any: operator keys and self-hosted open access have none.
+    const userId = operator || env.AUTH_REQUIRED === "false" ? null : await caller(request, env);
+    if (env.AUTH_REQUIRED !== "false" && !operator && !userId) {
       const call = {
         response: withCors(json({ detail: "Register and verify your email at https://sifty.dev/account, then sign in or send your API key as Authorization: Bearer <key>." }, 401)),
         units: 0,
@@ -228,6 +232,10 @@ export default {
         response_body: isHttpOutput(call.job?.output) ? call.job.output.body : undefined,
         response_is_json: call.response.headers.get("Content-Type")?.includes("json") ?? false,
       });
+    }
+    // The account's first answered call, for the signup funnel on /stats.
+    if (userId && call.response.ok) {
+      ctx.waitUntil(firstCall(env, userId).catch((error) => console.error("First call not recorded", error)));
     }
     // Recorded after the answer is sent, so it never slows or costs a caller their answer.
     ctx.waitUntil(

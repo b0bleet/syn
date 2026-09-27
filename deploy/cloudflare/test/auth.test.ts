@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { Miniflare, convertV4MiniflareOptions } from "miniflare";
 import { readFileSync } from "node:fs";
-import { authenticated, authRoute, type AuthEnv } from "../src/auth";
+import { authenticated, authRoute, caller, firstCall, type AuthEnv } from "../src/auth";
 import worker, { type Env } from "../src/index";
 
 const base = "https://sifty.example";
@@ -16,7 +16,7 @@ const password = "correct horse battery staple!";
 beforeAll(async () => {
   mf = new Miniflare(convertV4MiniflareOptions({ workers: [{ name: "auth-test", modules: true, script: "export default {fetch(){return new Response('ok')}}", compatibilityDate: "2026-09-01", d1Databases: ["AUTH_DB"] }] }));
   db = await mf.getD1Database("AUTH_DB") as unknown as D1Database;
-  for (const file of ["0001_accounts.sql", "0002_signup_measurement.sql", "0003_signup_conversion_id.sql"]) {
+  for (const file of ["0001_accounts.sql", "0004_signup_source.sql"]) {
     const sql = readFileSync(new URL("../migrations/"+file, import.meta.url).pathname, "utf8");
     await db.exec(sql.replace(/--[^\n]*/g, "").replace(/\n/g, " "));
   }
@@ -51,9 +51,9 @@ function cookies(response: Response) {
   return response.headers.getSetCookie().map(value=>value.split(";")[0]).join("; ");
 }
 function mailURL() { return mail.at(-1)!.text.match(/https:\/\/\S+/)![0]; }
-async function signedIn(email: string, fromAd = false) {
+async function signedIn(email: string, source?: string) {
   mockMail();
-  expect((await route("/api/auth/sign-up/email", {name:"Test",email,password}, undefined, undefined, fromAd ? {"X-Sifty-Reddit-Visit":"1"} : {})).status).toBe(200);
+  expect((await route("/api/auth/sign-up/email", {name:"Test",email,password}, undefined, undefined, source ? {Cookie:`sifty_source=${source}`} : {})).status).toBe(200);
   expect((await route(mailURL())).status).toBe(302);
   const login = await route("/api/auth/sign-in/email", {email,password});
   expect(login.status).toBe(200);
@@ -163,31 +163,40 @@ describe("verified registration and hosted API gate", () => {
   });
 });
 
-// Count only real new accounts acquired from an ad, after email verification and sign-in.
-describe("SignUp conversion claims", () => {
-  it("claims a verified ad signup once, including across repeat sessions", async () => {
-    const cookie = await signedIn("ad-signup@example.com", true);
-    const account = await (await route("/api/account", undefined, cookie)).json() as {signupConversionEligible:boolean};
-    expect(account.signupConversionEligible).toBe(true);
-    const claim = await (await route("/api/account/signup-conversion", {}, cookie)).json() as {report:boolean; conversionId:string};
-    expect(claim).toEqual({report:true, conversionId:expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)});
-    expect(await (await route("/api/account/signup-conversion", {}, cookie)).json()).toEqual({report:false});
-    expect(await db.prepare("SELECT redditSignupConversionId FROM user WHERE email = ?").bind("ad-signup@example.com").first()).toEqual({redditSignupConversionId:claim.conversionId});
-    const anotherCookie = await signedIn("another-ad-signup@example.com", true);
-    const anotherClaim = await (await route("/api/account/signup-conversion", {}, anotherCookie)).json() as {conversionId:string};
-    expect(anotherClaim.conversionId).not.toBe(claim.conversionId);
-    expect(await (await route("/api/account", undefined, cookie)).json()).toMatchObject({signupConversionEligible:false});
+// Every new account is counted under the channel its browser first came from, for /stats.
+describe("signup sources and first calls", () => {
+  const sourceOf = async (email: string) =>
+    (await db.prepare("SELECT signupSource, firstCallAt FROM user WHERE email = ?").bind(email).first<{signupSource:string|null; firstCallAt:number|null}>())!;
+
+  it("records the remembered channel on sign-up, and only a known one", async () => {
+    await signedIn("from-hn@example.com", "hacker%20news");
+    expect((await sourceOf("from-hn@example.com")).signupSource).toBe("hacker news");
+    await signedIn("forged@example.com", "buy%20my%20product");
+    expect((await sourceOf("forged@example.com")).signupSource).toBeNull();
+    await signedIn("no-cookie@example.com");
+    expect((await sourceOf("no-cookie@example.com")).signupSource).toBeNull();
   });
-  it("excludes direct signups and prevents duplicate signup attempts from reattributing them", async () => {
-    const email = "direct-signup@example.com", cookie = await signedIn(email);
-    await route("/api/auth/sign-up/email", {name:"Test",email,password}, undefined, undefined, {"X-Sifty-Reddit-Visit":"1"});
-    expect(await (await route("/api/account/signup-conversion", {}, cookie)).json()).toEqual({report:false});
-    expect((await route("/api/account/signup-conversion", {})).status).toBe(401);
+
+  it("keeps the first source when someone signs up again with the same email", async () => {
+    await signedIn("first-source@example.com", "reddit");
+    await route("/api/auth/sign-up/email", {name:"Test",email:"first-source@example.com",password}, undefined, undefined, {Cookie:"sifty_source=github"});
+    expect((await sourceOf("first-source@example.com")).signupSource).toBe("reddit");
   });
-  it("honors privacy headers and expires old signup eligibility", async () => {
-    const cookie = await signedIn("private-signup@example.com", true);
-    expect(await (await route("/api/account/signup-conversion", {}, cookie, undefined, {"Sec-GPC":"1"})).json()).toEqual({report:false});
-    await db.prepare("UPDATE user SET createdAt = 0 WHERE email = ?").bind("private-signup@example.com").run();
-    expect(await (await route("/api/account/signup-conversion", {}, cookie)).json()).toEqual({report:false});
+
+  it("marks the first answered call once, for keys and sessions alike", async () => {
+    const email = "first-call@example.com", cookie = await signedIn(email);
+    const session = new Request(base+"/",{method:"POST",headers:{Origin:base,"Content-Type":"application/json",Cookie:cookie}});
+    const id = await caller(session, env);
+    expect(id).toBeTruthy();
+    const { key } = await (await route("/api/account/key",{},cookie)).json() as {key:string};
+    expect(await caller(new Request(base+"/a,b/x",{headers:{Authorization:`Bearer ${key}`}}), env)).toBe(id);
+    expect((await sourceOf(email)).firstCallAt).toBeNull();
+    await firstCall(env, id!);
+    const first = (await sourceOf(email)).firstCallAt;
+    expect(first).toBeGreaterThan(0);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await firstCall(env, id!);
+    expect((await sourceOf(email)).firstCallAt).toBe(first);
   });
+
 });

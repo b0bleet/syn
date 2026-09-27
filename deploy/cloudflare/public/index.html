@@ -214,71 +214,10 @@ print(response.nouls["billing"].noul)</code></pre><button class="copy" data-copy
   </main>
   <footer>
     <p>Powered by Qwen3.5-4B. Predictions can be wrong. Requests and results are retained privately for 3 days. Images are never stored. Please don’t send sensitive data.</p>
-    <p id="ad-measurement-note" hidden>For visits from Reddit ads, we use the Reddit Pixel to measure visits, verified sign-ups, and successful trials. Classification inputs and results are not included in these events. <a href="https://www.reddit.com/policies/privacy-policy">Reddit privacy policy</a>.</p>
     <p><a href="/contact">Contact us</a> at <a href="mailto:emin@jolo.build">emin@jolo.build</a></p>
   </footer>
 </div>
 <noscript><p>JavaScript is needed for the playground. You can use the API directly at https://sifty.dev/spam,not+spam/Win+a+free+iPhone</p></noscript>
-<script id="reddit-ad-measurement">
-  // Only Reddit ad visitors and verified accounts created from those visits are measured.
-  window.trackClassificationCompleted = () => {};
-  window.trackVerifiedSignUp = async () => {};
-  (() => {
-    if (location.hostname !== "sifty.dev" || navigator.globalPrivacyControl || navigator.doNotTrack === "1") return;
-    const sourceKey = "sifty.reddit-ad-visit";
-    const completedKey = "sifty.reddit-classification-completed";
-    let fromAd = new URLSearchParams(location.search).get("utm_source") === "reddit";
-    let completed = false;
-    let ready;
-    let signupPending = false;
-    try {
-      fromAd = fromAd || sessionStorage.getItem(sourceKey) === "1";
-      if (fromAd) sessionStorage.setItem(sourceKey, "1");
-      completed = sessionStorage.getItem(completedKey) === "1";
-    } catch {}
-    function initialize() {
-      if (ready) return ready;
-      document.getElementById("ad-measurement-note").hidden = false;
-      const rdt = window.rdt = window.rdt || function () {
-        rdt.sendEvent ? rdt.sendEvent.apply(rdt, arguments) : rdt.callQueue.push(arguments);
-      };
-      rdt.callQueue = rdt.callQueue || [];
-      const pixel = document.createElement("script");
-      pixel.src = "https://www.redditstatic.com/ads/pixel.js?pixel_id=a2_jr6emnbb46ad";
-      pixel.async = true;
-      ready = new Promise(resolve => { pixel.onload = () => resolve(true); pixel.onerror = () => resolve(false); });
-      document.head.append(pixel);
-      rdt("init", "a2_jr6emnbb46ad");
-      rdt("track", "PageVisit");
-      return ready;
-    }
-    if (fromAd) initialize();
-    window.trackVerifiedSignUp = async eligible => {
-      if (!eligible || signupPending) return;
-      signupPending = true;
-      try {
-        // Eligibility comes from our authenticated server response, not the URL or form button.
-        if (!await initialize()) return;
-        const response = await fetch("/api/account/signup-conversion", {
-          method: "POST", headers: {"Content-Type":"application/json"}, body: "{}",
-        });
-        if (!response.ok) return;
-        const claim = await response.json();
-        if (claim.report && typeof claim.conversionId === "string" && claim.conversionId) {
-          window.rdt("track", "SignUp", { conversionId: claim.conversionId });
-        }
-      } catch { /* Tracking must never interrupt sign-in or classification. */ }
-    };
-    window.trackClassificationCompleted = () => {
-      if (!ready || completed) return;
-      try {
-        window.rdt("track", "Custom", { customEventName: "ClassificationCompleted" });
-        completed = true;
-        try { sessionStorage.setItem(completedKey, "1"); } catch {}
-      } catch {}
-    };
-  })();
-</script>
 <!-- Examples and their saved results, shown to visitors before they register. The page never
      calls the API for them. Refresh the results with scripts/example_results.py. -->
 <script id="examples-data" type="application/json">
@@ -377,8 +316,6 @@ print(response.nouls["billing"].noul)</code></pre><button class="copy" data-copy
 
   const accountReady = fetch("/api/account", {cache:"no-store", signal:AbortSignal.timeout(10000)}).then(async response => {
     if (response.ok) {
-      const account = await response.json();
-      window.trackVerifiedSignUp(account.signupConversionEligible);
       signedIn = true;
       document.getElementById("account-link").textContent = "Account";
       go.textContent = "Classify";
@@ -429,7 +366,6 @@ print(response.nouls["billing"].noul)</code></pre><button class="copy" data-copy
         return show("error", detail || `The request failed (${response.status}).`);
       }
       render(body.results[0], performance.now() - started);
-      window.trackClassificationCompleted();
     } catch {
       show("error", "Could not reach the API. Check your connection and try again.");
     } finally {

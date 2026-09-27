@@ -108,6 +108,12 @@ export async function statsPage(url: URL, live: DurableObjectStub<LiveStats>, db
   return response;
 }
 
+// Signup funnel steps for accounts registered in a range, and that range.
+const STEPS = `COALESCE(SUM(emailVerified = 1), 0) AS verified,
+  COALESCE(SUM(firstCallAt IS NOT NULL), 0) AS called,
+  COALESCE(SUM(EXISTS (SELECT 1 FROM api_key WHERE api_key.userId = user.id)), 0) AS keyed`;
+const RECENT = "FROM user WHERE createdAt >= ?";
+
 /** Public aggregates only: never read account identities, sessions, or key material. */
 export async function registrationStats(db: D1Database | undefined, days: number): Promise<string> {
   if (!db) return "";
@@ -115,7 +121,7 @@ export async function registrationStats(db: D1Database | undefined, days: number
   const since = now - days * 86_400_000;
   const today = Math.floor(now / 86_400_000) * 86_400_000;
   try {
-    const [totals, daily] = await db.batch<Row>([
+    const [totals, daily, funnel, sources, methods] = await db.batch<Row>([
       db.prepare(`SELECT COUNT(*) AS accounts,
         COALESCE(SUM(emailVerified = 1), 0) AS verified,
         COALESCE(SUM(emailVerified = 0), 0) AS pending,
@@ -127,7 +133,15 @@ export async function registrationStats(db: D1Database | undefined, days: number
         COUNT(*) AS registrations, SUM(emailVerified = 1) AS verified,
         SUM(emailVerified = 0) AS pending FROM user WHERE createdAt >= ?
         GROUP BY day ORDER BY day DESC`).bind(since),
+      db.prepare(`SELECT COUNT(*) AS registrations, ${STEPS} ${RECENT}`).bind(since),
+      // Channels are a fixed list (src/source.ts); accounts from before sources were kept have none.
+      db.prepare(`SELECT COALESCE(signupSource, 'not recorded') AS source, COUNT(*) AS registrations, ${STEPS}
+        ${RECENT} GROUP BY source ORDER BY registrations DESC`).bind(since),
+      db.prepare(`SELECT CASE WHEN EXISTS (SELECT 1 FROM account WHERE account.userId = user.id
+          AND account.providerId = 'github') THEN 'github' ELSE 'email' END AS method,
+        COUNT(*) AS registrations, ${STEPS} ${RECENT} GROUP BY method ORDER BY registrations DESC`).bind(since),
     ]);
+    const steps = { registrations: "registered", verified: "verified", called: "got a first answer", keyed: "have an API key" };
     const total = totals.results[0];
     return `<h2>Registered accounts</h2>${tiles([
       ["accounts in total", total.accounts],
@@ -138,7 +152,11 @@ export async function registrationStats(db: D1Database | undefined, days: number
       [`registered in last ${label(days)}`, total.recent],
     ])}${section(`Registrations in last ${label(days)} (UTC)`, daily.results, "registrations", {
       day: "registered on", registrations: "registrations", verified: "verified now", pending: "pending now",
-    })}<p class="intro">Verification status is current, grouped by registration date. API clients below are estimated from daily network identifiers, not registered accounts.</p>`;
+    })}<h2>Signups in last ${label(days)}, from registering to using the API</h2>${tiles(
+      Object.entries(steps).map(([key, name]) => [name, funnel.results[0]?.[key]]),
+    )}${section("Where signups came from", sources.results, "registrations", { source: "source", ...steps })}${
+      section("How they signed up", methods.results, "registrations", { method: "method", ...steps })
+    }<p class="intro">Verification status is current, grouped by registration date. A signup's source is the campaign tag or site its browser first arrived from, kept in a first-party cookie for 30 days. First answers are counted from 2026-09-27; API keys are the ones active now. API clients below are estimated from daily network identifiers, not registered accounts.</p>`;
   } catch (error) {
     console.error("Registration statistics unavailable", error);
     return "<h2>Registered accounts</h2><p>Registration statistics are unavailable right now.</p>";

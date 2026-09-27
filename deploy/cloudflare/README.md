@@ -101,36 +101,24 @@ assets offer a reload action after 15 seconds. Without JavaScript, the HTML rema
 visible. Bootstrap scripts and styles must load first to request data and control
 visibility; this delays presentation rather than delaying all asset downloads.
 
-### Reddit ad trial measurement
+### Signup sources
 
-The homepage loads Reddit Pixel `a2_jr6emnbb46ad` only on `sifty.dev` for visits
-tagged `utm_source=reddit` (remembered in session storage), or for a pending verified
-account created from such a visit. It records `PageVisit`
-and the custom event `ClassificationCompleted` after a successful playground result,
-once per browser-tab session. The standard `SignUp` event is emitted after a new
-ad-sourced account verifies its email and signs in to the playground. The signup
-source is recorded only at account creation; direct accounts and duplicate signup
-submissions cannot become new ad signups. A server-side atomic claim prevents
-repeat sign-ins or multiple tabs from counting the account twice. Each claimed
-signup gets a random UUID stored in D1 and sent as the Pixel's `conversionId`.
-This is an event identifier, not an account identifier. Conversions API is not
-configured; if added, it must reuse this stored ID for the same signup. Eligibility lasts
-seven days. The pixel must load before claiming the event; blocked pixels do not
-consume eligibility. The claim is not an acknowledgement of delivery: network
-failures after claiming can still lose an event. No email, password, account ID,
-or other advanced matching identifier is sent in `SignUp`. The account and reset
-pages do not load third-party tracking scripts. Text and image trials use the same event; API calls
-outside the playground are not attributed. The event contains no classification
-text, image URL, labels, or result, and no advanced matching identifiers are supplied.
-The pixel itself receives normal browser attribution data. Global Privacy Control
-and Do Not Track disable it. If session storage is blocked, deduplication lasts only
-until reload; ad blockers can prevent reporting. The footer discloses this measurement
-to ad visitors. Use a landing URL such as
-`https://sifty.dev/?utm_source=reddit&utm_medium=paid_social&utm_campaign=us_developer_trials`.
+Every page view (`/`, `/account`, `/contact`, `/stats`) without one sets a first-party
+`sifty_source` cookie (HttpOnly, 30 days) naming the visitor's channel: a known `utm_source`
+tag or referring site (Hacker News, Reddit, GitHub, X, LinkedIn, Product Hunt, Google, Bing,
+DuckDuckGo, AI assistants), otherwise `other campaign`, `other site` or `direct`. The first
+channel wins. When an account is created, by email or a first GitHub sign-in, the server stores
+that channel in `user.signupSource`, after checking it against the same fixed list, so a forged
+cookie is stored as nothing and no caller can put words on `/stats`. The first answered API call
+of each account sets `user.firstCallAt` once. No third-party scripts or pixels are loaded, and
+nothing is sent to ad networks. Tag campaign links, for example
+`https://sifty.dev/?utm_source=reddit&utm_campaign=launch`.
 
 `/stats` is a public page, linked from the site. It shows aggregate registered accounts,
 verified/pending accounts, active personal-key holders, today's registrations, and registrations
-by day in the selected range. Verification status is current, grouped by signup date, not
+by day in the selected range. For accounts registered in the range, it follows each step from
+registering to verifying, a first answered API call and an active API key, overall, by signup
+source, and by sign-in method (email or GitHub). Verification status is current, grouped by signup date, not
 verification date. No account identities or key material are queried or published. These D1
 aggregates share the page's 30-second cache and fail independently of API usage statistics.
 Next are today's API counts (UTC), live: calls, texts, estimated clients (daily network
@@ -253,4 +241,4 @@ page's `examples-data` block; the page does not call the API for them. Refresh t
 
 Tests exercise the real auth handlers against local D1, with email delivery mocked; they
 cover verification, sign-in rejection, CSRF checks, session/key revocation, password reset
-replay, and rate limits, plus the existing classification and Reddit tracking tests.
+replay, rate limits, signup sources and first calls, plus the existing classification tests.

@@ -339,6 +339,26 @@ describe("page and CORS", () => {
     expect(calls).toHaveLength(3);
   });
 
+  it("remembers a visitor's first channel in a cookie, from a fixed list", async () => {
+    const html = { fetch: async () => new Response("<html>page</html>", { headers: { "Content-Type": "text/html" } }) };
+    const env = makeEnv({ ASSETS: html as unknown as Fetcher });
+    const page = { Accept: "text/html" };
+    const cookie = async (path: string, headers: Record<string, string> = {}) =>
+      (await call(env, path, { headers: { ...page, ...headers } })).headers.get("Set-Cookie");
+    expect(await cookie("/", { Referer: "https://news.ycombinator.com/item?id=1" }))
+      .toBe("sifty_source=hacker%20news; Max-Age=2592000; Path=/; Secure; HttpOnly; SameSite=Lax");
+    expect(await cookie("/?utm_source=Reddit&utm_campaign=trial", { Referer: "https://www.google.com/" })).toMatch(/^sifty_source=reddit;/);
+    expect(await cookie("/?utm_source=my-secret-words")).toMatch(/^sifty_source=other%20campaign;/);
+    expect(await cookie("/", { Referer: "https://some.blog.example/post" })).toMatch(/^sifty_source=other%20site;/);
+    expect(await cookie("/account", { Referer: "https://sifty.example/" })).toMatch(/^sifty_source=direct;/);
+    expect(await cookie("/contact")).toMatch(/^sifty_source=direct;/);
+    // First touch wins; an unknown value is replaced rather than trusted.
+    expect(await cookie("/", { Referer: "https://github.com/", Cookie: "sifty_source=reddit" })).toBeNull();
+    expect(await cookie("/", { Referer: "https://github.com/", Cookie: "sifty_source=anything" })).toMatch(/^sifty_source=github;/);
+    // API answers never set it.
+    expect(await cookie("/a,b/hi", { Accept: "*/*", Referer: "https://github.com/" })).toBeNull();
+  });
+
   it("serves the page's files without a GPU job or a charge", async () => {
     const served: string[] = [];
     const assets = async (request: Request) => {

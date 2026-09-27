@@ -5,7 +5,7 @@ export const user = sqliteTable("user", {
   name: text("name").notNull(),
   email: text("email").notNull().unique(),
   emailVerified: integer("emailVerified", { mode: "boolean" }).notNull(),
-  redditAdSignup: integer("redditAdSignup", { mode: "boolean" }).notNull().default(false),
+  signupSource: text("signupSource"),
   image: text("image"),
   createdAt: integer("createdAt", { mode: "timestamp_ms" }).notNull(),
   updatedAt: integer("updatedAt", { mode: "timestamp_ms" }).notNull(),

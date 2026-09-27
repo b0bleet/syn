@@ -62,9 +62,6 @@
   function status(text,error=false) { $('status').textContent=text; $('status').className=error?'error':'success'; }
   async function api(path,body,method='POST') {
     const headers={'Content-Type':'application/json'};
-    if(path==='/api/auth/sign-up/email'&&!navigator.globalPrivacyControl&&navigator.doNotTrack!=='1') {
-      try { if(sessionStorage.getItem('sifty.reddit-ad-visit')==='1')headers['X-Sifty-Reddit-Visit']='1'; } catch {}
-    }
     const response=await fetch(path,{method,headers,body:method==='GET'?undefined:JSON.stringify(body||{})});
     const data=await response.json().catch(()=>({}));
     if(!response.ok)throw new Error(data.message||'Could not complete this request. Please try again.');
