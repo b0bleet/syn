@@ -170,7 +170,7 @@ The SDK's default timeout is 10 s; pass `timeout=120` when the GPU may be cold.
 
 A Cloudflare Worker (`deploy/cloudflare/`) is the public front door: a web page with a playground, and a free API. It counts each client IP against a daily allowance (1,000 units by default) and a global daily cap, sends the request to an always-on GPU pod running `syn serve` (`scripts/runpod_serve.py`), and returns what the same FastAPI app produced there, in about half a second. When the pod is down it falls back to a RunPod serverless endpoint (`deploy/runpod/`, scales to zero), whose first request after a quiet spell waits about a minute for a worker.
 
-CI (`.github/workflows/ci.yml`) tests every push and pull request. On `main` it deploys what changed: code under `src/` or `deploy/runpod/` becomes a GitHub release, which RunPod rebuilds from, and `deploy/cloudflare/` is redeployed with wrangler. Deploys stay off until the repository sets the variables `DEPLOY_GPU` / `DEPLOY_WORKER` to `true` (and the `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` secrets for the Worker), so forks never deploy.
+CI (`.github/workflows/ci.yml`) tests every push and pull request. On `main`, a change under `src/` or `deploy/runpod/` becomes a GitHub release, which RunPod rebuilds from. Releases stay off until the repository sets the variable `DEPLOY_GPU` to `true`, so forks never release. The Cloudflare Worker is deployed by hand with `npx wrangler deploy` from `deploy/cloudflare/`.
 
 ## Configuration
 

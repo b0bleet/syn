@@ -163,8 +163,9 @@ npx wrangler secret put API_KEYS           # optional: comma-separated keys with
 npx wrangler deploy                        # -> https://syn.<your-subdomain>.workers.dev
 ```
 
-Secrets persist across deploys, so this is once per account; CI (`.github/workflows/ci.yml`)
-redeploys the code on later pushes. Limits are `DAILY_LIMIT` and `GLOBAL_DAILY_LIMIT` in
+Secrets persist across deploys, so this is once per account; later code changes need only
+`npx wrangler deploy` (after `npx wrangler d1 migrations apply sifty-auth --remote` when there is a
+new migration). CI tests the Worker but does not deploy it. Limits are `DAILY_LIMIT` and `GLOBAL_DAILY_LIMIT` in
 `wrangler.jsonc` (the page states `DAILY_LIMIT`; keep them in step). For your own domain, add a
 custom domain to the Worker in the Cloudflare dashboard (the zone must be on Cloudflare). Leave
 `SYN_API_KEY` unset on the RunPod endpoint: the endpoint only accepts the RunPod key.
