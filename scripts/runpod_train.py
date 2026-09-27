@@ -1,7 +1,7 @@
 """Start a RunPod GPU pod that trains the general head and stops itself when done.
 
     export RUNPOD_API_KEY=... HF_TOKEN=...
-    uv run python scripts/runpod_train.py --model Qwen/Qwen3-8B --hf-repo <user>/syn-training --wait
+    uv run python scripts/runpod_train.py --model Qwen/Qwen3-8B --hf-repo siftylabs/Syn-0.1 --wait
 
 The pod pulls a stock PyTorch image, clones this repository at --ref (default: the current
 commit, which must be pushed), installs it, and runs deploy/runpod/train_job.py. With

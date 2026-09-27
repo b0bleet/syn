@@ -1,8 +1,8 @@
 """Push data to, or pull results from, the Hugging Face repo the training job uses.
 
     export HF_TOKEN=...   # huggingface.co/settings/tokens, write access
-    uv run python scripts/hf_store.py push data --repo <user>/syn-training
-    uv run python scripts/hf_store.py pull heads/Qwen-Qwen3-8B/<run> --repo <user>/syn-training --to runs
+    uv run python scripts/hf_store.py push data --repo siftylabs/Syn-0.1
+    uv run python scripts/hf_store.py pull heads/Qwen-Qwen3-8B/<run> --repo siftylabs/Syn-0.1 --to runs
 
 `push` uploads a local directory to the same path in the repo (or `--path-in-repo`), so
 `push data` publishes every dataset under data/ and `push data/my-suite` just one. `pull`

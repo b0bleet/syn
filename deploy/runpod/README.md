@@ -59,13 +59,13 @@ against the same FastAPI app `syn serve` runs and returns `{"status", "headers",
 
 `scripts/runpod_train.py` starts a GPU pod that clones this repository, caches features for
 every dataset under `data/`, runs `syn transfer`, and stops itself. Nothing runs on your
-machine, and nothing needs a volume: a private Hugging Face repo is the store.
+machine, and nothing needs a volume: a Hugging Face repo is the store.
 
 ```sh
 export RUNPOD_API_KEY=...            # console -> Settings -> API Keys
 export HF_TOKEN=...                  # huggingface.co/settings/tokens, write access
-uv run python scripts/hf_store.py push data --repo <user>/syn-training   # optional: your own rows
-uv run python scripts/runpod_train.py --model Qwen/Qwen3-8B --hf-repo <user>/syn-training --wait
+uv run python scripts/hf_store.py push data --repo siftylabs/Syn-0.1   # optional: your own rows
+uv run python scripts/runpod_train.py --model Qwen/Qwen3-8B --hf-repo siftylabs/Syn-0.1 --wait
 ```
 
 - **The repo** (`--hf-repo`, created private if missing) holds `data/<source>/*.jsonl` (your
@@ -73,9 +73,9 @@ uv run python scripts/runpod_train.py --model Qwen/Qwen3-8B --hf-repo <user>/syn
   (cached once per backbone, pushed as soon as they are extracted, pulled by the next run),
   `heads/<model>/<run>/` (checkpoints, `transfer.json`, `RESULT.md`), and `logs/`. Serve a
   head from it with `SYN_READOUT=head` and
-  `SYN_HEAD_PATH=hf://<user>/syn-training/heads/<model>/<run>/all-sources.safetensors`, plus
-  `HF_TOKEN` on the endpoint; the worker downloads the two small files at startup.
-  `scripts/hf_store.py pull heads/<model>/<run> --repo <user>/syn-training --to runs` fetches
+  `SYN_HEAD_PATH=hf://siftylabs/Syn-0.1/heads/<model>/<run>/all-sources.safetensors`;
+  the worker downloads the two small files at startup. Public files do not require `HF_TOKEN`.
+  `scripts/hf_store.py pull heads/<model>/<run> --repo siftylabs/Syn-0.1 --to runs` fetches
   a run to your machine.
 - **A network volume** (`--volume-id`) still works instead of, or as well as, the repo; then
   the same files sit under `/runpod-volume` and `SYN_HEAD_PATH` can be a path on it. Without
@@ -124,7 +124,7 @@ pushing the changes, preview the CE-only experiment (the preview makes no API re
 ```sh
 uv run python scripts/runpod_train.py --task pointer \
   --model Qwen/Qwen3-8B-Base --revision 49e3418fbbbca6ecbdf9608b4d22e5a407081db4 \
-  --hf-repo jolobuild/syn-training --limit-per-source 0 --epochs 2 \
+  --hf-repo siftylabs/Syn-0.1 --limit-per-source 0 --epochs 2 \
   --ordinal-weight 0 --run qwen3-8b-ce-only --dry-run
 ```
 
