@@ -135,6 +135,8 @@ pre { overflow: auto; border: 1px solid #000; padding: 16px; font-size: 12px; }
 }
 @media (max-width: 700px) {
   .site { padding: 20px; }
+  header { align-items: flex-start; }
+  nav { flex-wrap: wrap; justify-content: flex-end; gap: 6px 16px; }
   main { padding: 32px 0; justify-content: flex-start; }
   .work { grid-template-columns: 1fr; gap: 32px; }
   h1 { font-size: 20px; }
@@ -150,7 +152,7 @@ pre { overflow: auto; border: 1px solid #000; padding: 16px; font-size: 12px; }
 <div class="site">
   <header>
     <a class="logo" href="#">sifty</a>
-    <nav aria-label="Navigation"><a id="docs-link" href="#docs">Docs</a><a href="/stats">Stats</a><a href="https://github.com/b0bleet/syn">GitHub</a><a href="/contact">Contact</a><a id="account-link" href="/account">Register / Sign in</a></nav>
+    <nav aria-label="Navigation"><a id="docs-link" href="#docs">Docs</a><a href="/blog/">Blog</a><a href="/stats">Stats</a><a href="https://github.com/b0bleet/syn">GitHub</a><a href="/contact">Contact</a><a id="account-link" href="/account">Register / Sign in</a></nav>
   </header>
   <main>
     <section id="playground" aria-labelledby="heading">

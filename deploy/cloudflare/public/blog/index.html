@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sifty blog</title>
+<meta name="description" content="Notes from building sifty, an open-source classification API: results, what failed, and how to reproduce it.">
+<link rel="canonical" href="https://sifty.dev/blog/">
+<link rel="icon" href="/favicon.ico" sizes="48x48">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<script src="/page-ready.js"></script>
+<style>
+* { box-sizing: border-box; }
+:root { color-scheme: light; font: 14px/1.65 "Lucida Console", Monaco, monospace; color: #000; background: #fff; }
+body { margin: 0; }
+a { color: inherit; text-underline-offset: 3px; }
+.site { max-width: 1080px; min-height: 100svh; margin: auto; padding: 32px 40px 20px; display: flex; flex-direction: column; }
+header { display: flex; justify-content: space-between; align-items: baseline; gap: 20px; }
+.logo { font-size: 24px; font-weight: bold; text-decoration: none; }
+nav { display: flex; gap: 24px; font-size: 12px; }
+main { flex: 1; padding: clamp(48px, 10vh, 96px) 0 48px; max-width: 680px; width: 100%; }
+h1 { font-size: 22px; line-height: 1.4; font-weight: normal; margin: 0 0 32px; }
+ol { list-style: none; margin: 0; padding: 0; }
+li { margin: 0 0 28px; }
+li h2 { font-size: 16px; font-weight: normal; margin: 0 0 4px; }
+time { font-size: 12px; }
+li p { margin: 6px 0 0; }
+footer { font-size: 10px; }
+@media (max-width: 700px) {
+  .site { padding: 20px; }
+  header { align-items: flex-start; }
+  nav { gap: 16px; }
+  main { padding-top: 48px; }
+  h1 { font-size: 20px; }
+}
+</style>
+</head>
+<body>
+<div class="site">
+  <header>
+    <a class="logo" href="/">sifty</a>
+    <nav aria-label="Navigation"><a href="/#docs">Docs</a><b>Blog</b><a href="/stats">Stats</a><a href="https://github.com/b0bleet/syn">GitHub</a><a href="/contact">Contact</a></nav>
+  </header>
+  <main>
+    <h1>Blog</h1>
+    <ol>
+      <li>
+        <h2><a href="/blog/open-weights-jev">How close can open weights get to Jev?</a></h2>
+        <time datetime="2026-09-28">2026-09-28</time>
+        <p>A 0.8M-parameter head on a frozen Qwen3 went from 0.698 to 0.869 on AG News. What worked, what didn't, and how to reproduce it.</p>
+      </li>
+    </ol>
+  </main>
+  <footer>sifty is an independent open-source project, not affiliated with TypeSafe AI.</footer>
+</div>
+</body>
+</html>

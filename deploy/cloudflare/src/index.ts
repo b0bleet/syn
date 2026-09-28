@@ -176,6 +176,10 @@ export default {
       headers.set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'; form-action 'self'");
       return new Response(response.body, { status: response.status, headers });
     }
+    // Blog posts are plain pages in public/blog/, reserved whole so no post URL becomes an API call.
+    if (reading && (url.pathname === "/blog" || url.pathname.startsWith("/blog/"))) {
+      return rememberSource(request, await env.ASSETS.fetch(request));
+    }
     if (reading && url.pathname === "/stats") return rememberSource(request, await statsPage(url, liveStats(env), env.AUTH_DB));
     if (reading && STATIC_FILES.has(url.pathname)) return env.ASSETS.fetch(request);
     // Ad click/UTM parameters belong to the landing page, not the classification API.

@@ -367,7 +367,7 @@ describe("page and CORS", () => {
     };
     const env = makeEnv({ DAILY_LIMIT: "1", ASSETS: { fetch: assets } as unknown as Fetcher });
     const calls = runpod(DONE);
-    const files = [...STATIC_FILES, "/contact", "/contact.html"];
+    const files = [...STATIC_FILES, "/contact", "/contact.html", "/blog", "/blog/", "/blog/any-post", "/blog/a,b"];
     for (const path of files) {
       const response = await call(env, path);
       expect(await response.text()).toBe("file");
