@@ -51,7 +51,7 @@ or the URL shorthand:
 `output.selected_option_id` is the answer; the full `ScoreResponse` (probabilities, wins,
 agreement, latency) comes back verbatim. A bad payload fails the job with the reason in `error`.
 
-The public API is the Cloudflare Worker in `deploy/cloudflare/`, which sends
+The public API at sifty.dev is a Cloudflare Worker (kept in its own repository), which sends
 `{"input": {"http": {"method", "path", "headers", "body"}}}`; the handler replays that request
 against the same FastAPI app `syn serve` runs and returns `{"status", "headers", "body"}`.
 
@@ -157,7 +157,7 @@ suite scores. Evaluate an untouched transfer test only after all model selection
   context to the repo root. RunPod's scanner only looks for `runpod.serverless.start()`
   at the repo root, so it warns about `deploy/runpod/handler.py`; continue anyway.
 - Cold start = image pull + model load + weight download. The public API avoids it with an
-  always-on pod (`scripts/runpod_serve.py`, see `deploy/cloudflare/README.md`) and keeps this
+  always-on pod (`scripts/runpod_serve.py`) and keeps this
   endpoint at zero active workers as the fallback.
 - `readout=head` needs `SYN_HEAD_PATH` pointing at a checkpoint inside the image or the
   network volume, and the head must have been trained on the same backbone; the local

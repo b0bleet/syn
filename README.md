@@ -168,9 +168,9 @@ The SDK's default timeout is 10 s; pass `timeout=120` when the GPU may be cold.
 
 ## Public API
 
-A Cloudflare Worker (`deploy/cloudflare/`) is the public front door: a web page with a playground, and a free API. It counts each client IP against a daily allowance (1,000 units by default) and a global daily cap, sends the request to an always-on GPU pod running `syn serve` (`scripts/runpod_serve.py`), and returns what the same FastAPI app produced there, in about half a second. When the pod is down it falls back to a RunPod serverless endpoint (`deploy/runpod/`, scales to zero), whose first request after a quiet spell waits about a minute for a worker.
+The hosted instance at [sifty.dev](https://sifty.dev) puts a Cloudflare Worker in front, with a web page, a playground, and a free API; the Worker lives in its own repository. It counts each client IP against a daily allowance (1,000 units by default) and a global daily cap, sends the request to an always-on GPU pod running `syn serve` (`scripts/runpod_serve.py`), and returns what the same FastAPI app produced there, in about half a second. When the pod is down it falls back to a RunPod serverless endpoint (`deploy/runpod/`, scales to zero), whose first request after a quiet spell waits about a minute for a worker.
 
-CI (`.github/workflows/ci.yml`) tests every push and pull request. On `main`, a change under `src/` or `deploy/runpod/` becomes a GitHub release, which RunPod rebuilds from. Releases stay off until the repository sets the variable `DEPLOY_GPU` to `true`, so forks never release. The Cloudflare Worker is deployed by hand with `npx wrangler deploy` from `deploy/cloudflare/`.
+CI (`.github/workflows/ci.yml`) tests every push and pull request. On `main`, a change under `src/` or `deploy/runpod/` becomes a GitHub release, which RunPod rebuilds from. Releases stay off until the repository sets the variable `DEPLOY_GPU` to `true`, so forks never release.
 
 ## Configuration
 
@@ -202,5 +202,4 @@ CI (`.github/workflows/ci.yml`) tests every push and pull request. On `main`, a 
 HF_HOME=.cache/huggingface uv run --extra local pytest -q
 uv run ruff check src tests
 uv run ruff format --check src tests
-cd deploy/cloudflare && npm ci && npm test && npm run check
 ```

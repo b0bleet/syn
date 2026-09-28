@@ -1,6 +1,6 @@
 """Start the always-on GPU pod that serves the public API with `syn serve`.
 
-The Cloudflare Worker (deploy/cloudflare) sends every call to this pod first and falls back to
+The sifty.dev Cloudflare Worker sends every call to this pod first and falls back to
 the serverless endpoint only when the pod is down, so the endpoint can scale to zero. An
 on-demand community-cloud pod costs a fraction of an always-on serverless worker.
 
@@ -11,7 +11,7 @@ are cached on the pod's volume, so a restart doesn't download them again.
     export RUNPOD_API_KEY=...                       # console -> Settings -> API Keys
     uv run python scripts/runpod_serve.py --api-key "$(openssl rand -hex 24)"
 
-Then give the Worker the pod (deploy/cloudflare):
+Then give the Worker the pod:
 
     npx wrangler secret put POD_URL        # https://<pod id>-8765.proxy.runpod.net
     npx wrangler secret put POD_API_KEY    # the --api-key value
