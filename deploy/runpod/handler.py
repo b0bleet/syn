@@ -33,8 +33,10 @@ import traceback
 
 import runpod
 
+from syn.crawling import CrawlSession
 from syn.http_job import serve
 from syn.prompt import PromptError
+from syn.reader import ReaderError
 from syn.schema import ScoreRequest
 from syn.shorthand import ShorthandError, build_request, parse
 
@@ -101,8 +103,10 @@ def score(payload: dict) -> dict:
     except (ShorthandError, ValueError) as exc:
         return {"error": str(exc)}
     try:
-        return state["scorer"].score(request).model_dump()
-    except PromptError as exc:
+        scorer = state["scorer"]
+        with CrawlSession(scorer.settings, scorer) as crawl:
+            return crawl.score(request).model_dump()
+    except (PromptError, ReaderError) as exc:
         return {"error": str(exc)}
 
 

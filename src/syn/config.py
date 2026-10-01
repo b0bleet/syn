@@ -59,6 +59,15 @@ class Settings(BaseSettings):
     # Images are scaled down to at most this many pixels, which bounds their tokens (about one
     # token per 32 x 32 pixel patch on Qwen3.5).
     image_max_pixels: int = Field(default=1024 * 1024, ge=32 * 32, le=16 * 1024 * 1024)
+    # URLs in the existing context/question/criteria are read before answering. By default
+    # only caller URLs are read; a positive crawl depth enables model-selected same-host links.
+    reader: bool = True
+    reader_url: str = "https://r.jina.ai"
+    jina_api_key: str | None = Field(default=None, repr=False)
+    reader_timeout_seconds: float = Field(default=10, gt=0, le=180)
+    crawl_max_pages: int = Field(default=5, ge=1, le=20)
+    crawl_max_depth: int = Field(default=0, ge=0, le=5)
+    crawl_timeout_seconds: float = Field(default=30, gt=0, le=180)
 
     @field_validator("head_path", "pointer_path", mode="before")
     @classmethod

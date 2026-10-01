@@ -21,6 +21,7 @@ ENV SYN_BACKEND=local \
     SYN_MODEL=Qwen/Qwen3.5-4B \
     SYN_ORDERINGS=1 \
     SYN_IMAGES=true \
+    SYN_CRAWL_MAX_DEPTH=0 \
     HF_HOME=/runpod-volume/huggingface-cache \
     HF_HUB_ENABLE_HF_TRANSFER=1
 

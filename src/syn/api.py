@@ -11,7 +11,9 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 
 from .backends import BackendError, LocalBackend, SGLangBackend, resolve_config, revision_commit
 from .config import Settings
+from .crawling import CrawlSession
 from .prompt import HEAD_VERSION, PromptBuilder, PromptError
+from .reader import ReaderError
 from .schema import (
     ClassifyRequest,
     ClassifyResponse,
@@ -214,11 +216,16 @@ def create_app(settings: Settings | None = None, scorer: Scorer | None = None) -
         # RunPod handler does when it replays a Worker's request in-process.
         app.state.scorer = scorer
 
-    def run(request: ScoreRequest) -> ScoreResponse:
+    def run(request: ScoreRequest, crawl: CrawlSession | None = None) -> ScoreResponse:
         try:
-            return app.state.scorer.score(request)
+            if crawl is not None:
+                return crawl.score(request)
+            with CrawlSession(settings, app.state.scorer) as session:
+                return session.score(request)
         except PromptError as exc:
             raise HTTPException(422, str(exc)) from exc
+        except ReaderError as exc:
+            raise HTTPException(502, str(exc)) from exc
         except BackendError as exc:
             logger.exception("Backend scoring failed")
             raise HTTPException(502, "Scoring backend failed") from exc
@@ -275,7 +282,8 @@ def create_app(settings: Settings | None = None, scorer: Scorer | None = None) -
     def systemone(body: SystemOneRequest, response: Response):
         response.headers["x-typesafe-request-id"] = uuid.uuid4().hex
         try:
-            return system_one(run, body, settings.model)
+            with CrawlSession(settings, app.state.scorer) as crawl:
+                return system_one(lambda request: run(request, crawl), body, settings.model)
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
 
@@ -343,7 +351,8 @@ def create_app(settings: Settings | None = None, scorer: Scorer | None = None) -
         texts = [body.input] if isinstance(body.input, str) else body.input
         # Validate the whole batch before scoring any of it.
         requests = [to_request(body.labels, text, body.question) for text in texts]
-        return _classified([run(request) for request in requests], started)
+        with CrawlSession(settings, app.state.scorer) as crawl:
+            return _classified([run(request, crawl) for request in requests], started)
 
     # Registered last: its pattern would otherwise shadow the routes above.
     @app.get(

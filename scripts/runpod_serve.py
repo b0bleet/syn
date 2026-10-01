@@ -72,6 +72,7 @@ def build_request(args: argparse.Namespace) -> dict:
             "SYN_MODEL": args.model,
             "SYN_ORDERINGS": "1",
             "SYN_IMAGES": "true",
+            "SYN_CRAWL_MAX_DEPTH": "0",
             "SYN_API_KEY": args.api_key,
             "HF_HOME": "/workspace/hf",
             "HF_HUB_ENABLE_HF_TRANSFER": "1",

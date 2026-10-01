@@ -29,6 +29,8 @@ RunPod console → Serverless → New Endpoint:
   is not billed. A network volume works too but is slower to read.
 - **Env vars**: `SYN_MODEL` (default `Qwen/Qwen3.5-4B`), `SYN_READOUT` (`letters`),
   `SYN_ORDERINGS` (`1`, the caller's option order only), `SYN_REVISION` to pin a commit.
+  `SYN_CRAWL_MAX_DEPTH=0` reads only URLs supplied in the existing prompt and never follows
+  discovered links. The image and always-on pod launcher both set this explicitly.
   The SGLang-side settings are unused here. The pmi, head, and pointer readouts stay on Qwen3.
 
 ## Call it

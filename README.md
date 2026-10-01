@@ -71,6 +71,48 @@ Images are at most 10 MB and are scaled down to `SYN_IMAGE_MAX_PIXELS` (about on
 
 `scripts/image_benchmark.py` scores Imagenette photos against all ten class names. On 200 images (20 per class) Qwen3.5-4B got all 200 right, median top-label probability 0.993, and a control of plain gray images drew the same label every time, so the answers come from the pictures. Imagenette's classes are easy to tell apart; this shows images work end to end, not how a hard task will go. Check your own labels on a few real images.
 
+## Web pages in prompts
+
+Put URLs in the existing `input`, `context`, or System One `state`, and ask your question as
+usual. URLs in `question`, `criteria`, or System One `instructions` are also read. The service
+uses [Jina Reader](https://github.com/jina-ai/reader) to read only the supplied URLs and scores
+the original options using the collected evidence. Discovered links are not followed by
+default. The existing endpoints and response shapes apply:
+
+```sh
+curl http://127.0.0.1:8765/ -H 'Content-Type: application/json' \
+  -d '{"input": "Check https://example.com for its security documentation.",
+       "question": "Does this company publish an ISO 27001 certification?",
+       "labels": ["yes", "no", "insufficient evidence"]}'
+```
+
+The same task can use `/v1/score` with `context`, `question`, and `options`, or `/v1/systemone`
+with a URL in `state` and the task in each question's `instructions`. Plain text takes the
+usual scoring path. The separate `image` field keeps its image behavior; option descriptions
+do not supply crawl seeds. Offline training and feature extraction do not crawl URLs.
+
+By default, a request can attempt five supplied URLs, with a maximum link depth of zero, and spend
+30 seconds on crawling, with a 10-second timeout for each Reader call. Batches and System One
+questions share those limits and reuse pages within the request. Failed link reads and reached
+limits are included in the model's evidence; a failed seed read returns HTTP 502. Invalid or
+private seed URLs return HTTP 422. More seed URLs than the page limit also returns HTTP 422.
+Caller text and options stay intact; selected passages from fetched pages are fitted to the
+remaining model context, with source URLs and truncation markers. If no space remains for
+evidence, the request returns HTTP 422. Set `SYN_CRAWL_MAX_DEPTH=2` to enable optional link
+following: the configured Syn model chooses same-host links until it stops or abstains, or
+a crawl limit is reached. Choices shortlist up to 25 links by text overlap with the task,
+from a frontier of up to 256 links, and include a stop choice.
+
+Reader defaults to the hosted service. Set `SYN_JINA_API_KEY` for authenticated Reader access,
+or set `SYN_READER_URL=http://reader:8081` for a self-hosted instance. Hosted Reader has its own
+rate limits and token billing. Target URLs are checked for public addresses locally, and Reader
+must enforce its own connection and redirect protections. Set `SYN_READER=false` to classify
+URL-containing text without fetching pages. Scoring metadata describes the final decision;
+internal crawl choices make additional model calls and appear in `SYN_LOG_PATH` when enabled.
+
+Link choices use the configured checkpoint's option preferences. Evaluate them on your own
+crawl tasks; the current tests verify execution and limits, rather than real-model crawl quality.
+
 ## Data
 
 `scripts/download_data.py` rebuilds all of `data/`: the HF imports used for the measurements below, the synthetic routing set, and the `data/eval/` subsets:
@@ -191,10 +233,17 @@ CI (`.github/workflows/ci.yml`) tests every push and pull request. On `main`, a 
 | `SYN_LOG_PATH` | unset | Optional JSONL decision log |
 | `SYN_SGLANG_URL` | `http://127.0.0.1:30000` | SGLang server URL |
 | `SYN_SGLANG_CHECK_MODEL` | `true` | Refuse to start if SGLang serves another model |
-| `SYN_MAX_PROMPT_TOKENS` | `8192` | Reject longer prompts; never truncate |
+| `SYN_MAX_PROMPT_TOKENS` | `8192` | Reject longer caller prompts; fit fetched page excerpts into the remaining context |
 | `SYN_LOCAL_BATCH_TOKENS` | `16384` | Token budget per batched local forward |
 | `SYN_IMAGES` | `false` | Accept an `image` in requests; loads the full multimodal Qwen3.5 checkpoint |
 | `SYN_IMAGE_MAX_PIXELS` | `1048576` | Images are scaled down to at most this many pixels |
+| `SYN_READER` | `true` | Automatically read supplied URLs in existing HTTP requests and RunPod jobs |
+| `SYN_READER_URL` | `https://r.jina.ai` | Hosted or self-hosted Jina Reader base URL |
+| `SYN_JINA_API_KEY` | unset | Bearer token sent to Reader; separate from the service's `SYN_API_KEY` |
+| `SYN_READER_TIMEOUT_SECONDS` | `10` | Timeout for each Reader call |
+| `SYN_CRAWL_MAX_PAGES` | `5` | Maximum attempted page reads per request, shared across questions or batch items |
+| `SYN_CRAWL_MAX_DEPTH` | `0` | Maximum followed-link depth; `0` reads only caller URLs |
+| `SYN_CRAWL_TIMEOUT_SECONDS` | `30` | Crawl time window; prevents further reads or crawl decisions after it expires |
 
 ## Checks
 
